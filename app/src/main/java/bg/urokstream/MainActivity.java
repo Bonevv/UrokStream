@@ -252,8 +252,9 @@ public final class MainActivity extends Activity {
                     player=new ExoPlayer.Builder(this).setLoadControl(new DefaultLoadControl.Builder().setBufferDurationsMs(5000,25000,1000,2000).build()).build();
                     playerView.setPlayer(player);
                     player.addListener(new Player.Listener() {
-                        @Override public void onPlayerError(PlaybackException error) { lessonError(lesson,error); }
+                        @Override public void onPlayerError(PlaybackException error) { if (generation==myGeneration&&engine==selected) lessonError(lesson,error); }
                         @Override public void onPlaybackStateChanged(int state) {
+                            if (generation!=myGeneration||engine!=selected) return;
                             loading.setVisibility(state==Player.STATE_BUFFERING ? View.VISIBLE : View.GONE);
                             if (state==Player.STATE_READY) { playerView.requestFocus(); }
                             if (state==Player.STATE_ENDED) completed(lesson);
