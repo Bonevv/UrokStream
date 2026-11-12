@@ -2,11 +2,9 @@ package bg.urokstream;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.res.Configuration;
 import android.graphics.Color;
-import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
-import android.graphics.drawable.StateListDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -14,16 +12,18 @@ import android.os.Handler;
 import android.os.Looper;
 import android.text.Editable;
 import android.text.TextWatcher;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
-import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
@@ -34,7 +34,7 @@ import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.ProgressiveMediaSource;
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy;
 import androidx.media3.ui.PlayerView;
-import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -42,382 +42,323 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import static bg.urokstream.KidStyle.*;
 
 @UnstableApi
 public final class MainActivity extends Activity {
-    private static final int PICK_TORRENT = 10;
-    private static final int BG = Color.rgb(13, 22, 37);
-    private static final int INK = Color.rgb(235, 242, 250);
-    private static final int MUTED = Color.rgb(163, 181, 202);
-    private static final int MINT = Color.rgb(83, 224, 183);
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
-    private FrameLayout root;
-    private LinearLayout browser;
-    private LinearLayout playerPanel;
-    private TextView subtitle, breadcrumb, empty, playingTitle, streamStatus;
-    private Button builtIn, importButton, up;
+    private SharedPreferences memory;
+    private FrameLayout root, playerArea;
+    private LinearLayout browser, playerPanel, hero, loading;
+    private TextView greeting, encouragement, section, empty, playerTitle, waiting;
+    private Button back, classButton, resume;
     private EditText search;
-    private RecyclerView list;
-    private Rows adapter;
+    private RecyclerView grid;
+    private GridLayoutManager layout;
+    private Cards adapter;
     private PlayerView playerView;
     private ExoPlayer player;
     private StreamEngine engine;
-    private Catalog catalog;
+    private LessonLibrary library;
+    private LessonLibrary.Lesson current;
+    private String subject, folder = "";
     private File torrent;
-    private String folder = "";
-    private int loadGeneration;
-    private int playGeneration;
-    private boolean resumed;
-    private boolean loading;
+    private int grade = -2, generation;
+    private boolean pickingGrade, resumed;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
-        if (Build.VERSION.SDK_INT >= 33) {
-            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(0, this::goBack);
-        }
-        createUi();
-        worker.execute(() -> {
-            try { SafeFiles.deleteTree(new File(getFilesDir(), "active-stream")); }
-            catch (IOException e) { main.post(() -> showError(e.getMessage())); }
-        });
-        loadBuiltin();
+        memory = getSharedPreferences("my-learning", MODE_PRIVATE);
+        grade = memory.getInt("grade", -2); pickingGrade = grade == -2;
+        if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(0, this::goBack);
+        createUi(); loadLibrary();
     }
 
     private void createUi() {
-        root = new FrameLayout(this);
-        root.setBackgroundColor(BG);
+        root = new FrameLayout(this); root.setBackgroundColor(BG);
         root.setOnApplyWindowInsetsListener((v, insets) -> {
-            v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
-                    insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
+            v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
             return insets;
         });
         setContentView(root);
-        browser = column();
-        browser.setPadding(dp(20), dp(12), dp(20), dp(8));
-        root.addView(browser, match());
-        TextView title = text("UrokStream", 28, INK);
-        title.setTypeface(null, Typeface.BOLD);
-        browser.addView(title);
-        subtitle = text("Уроци от торент · избираш видео и гледаш", 14, MUTED);
-        browser.addView(subtitle);
-        LinearLayout actions = new LinearLayout(this);
-        builtIn = button("Вградени уроци", v -> loadBuiltin());
-        importButton = button("Отвори .torrent", v -> {
-            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-            intent.addCategory(Intent.CATEGORY_OPENABLE);
-            intent.setType("*/*");
-            try { startActivityForResult(intent, PICK_TORRENT); }
-            catch (android.content.ActivityNotFoundException e) { showError("На устройството няма файлов мениджър. Вградените уроци са достъпни."); }
+        browser = column(); browser.setPadding(d(20), d(8), d(20), d(8)); root.addView(browser, fill());
+        LinearLayout top = row();
+        TextView brand = text(this, "УчаСе", 24, PURPLE, true);
+        brand.setContentDescription("УчаСе, моята библиотека с уроци");
+        top.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
+        classButton = button(this, "Моят клас", Color.WHITE, v -> { pickingGrade = true; search.setText(""); render(); grid.scrollToPosition(0); });
+        top.addView(classButton, new LinearLayout.LayoutParams(-2, d(48)));
+        browser.addView(top, new LinearLayout.LayoutParams(-1, d(54)));
+
+        hero = row(); hero.setPadding(d(18), d(6), d(8), d(6)); hero.setBackground(round(this, 0xFFF0EBFF, 26, Color.TRANSPARENT));
+        LinearLayout welcome = column();
+        greeting = text(this, "Здравей, откривателю!", 23, INK, true); welcome.addView(greeting);
+        encouragement = text(this, "Подреждаме твоите уроци…", 14, MUTED, false); welcome.addView(encouragement);
+        hero.addView(welcome, new LinearLayout.LayoutParams(0, -2, 1));
+        hero.addView(new Owl(this), new LinearLayout.LayoutParams(d(100), -1));
+        LinearLayout.LayoutParams heroLp = new LinearLayout.LayoutParams(-1, heroHeight()); heroLp.topMargin = d(8); heroLp.bottomMargin = d(12); browser.addView(hero, heroLp);
+
+        resume = button(this, "▶  Продължи урока", MINT, v -> {
+            LessonLibrary.Lesson last = library == null ? null : library.find(memory.getInt("last-index", -1));
+            if (last != null) play(last);
         });
-        actions.addView(builtIn, new LinearLayout.LayoutParams(0, dp(52), 1));
-        actions.addView(importButton, new LinearLayout.LayoutParams(0, dp(52), 1));
-        browser.addView(actions);
-        search = new EditText(this);
-        search.setSingleLine(true);
-        search.setTextColor(INK);
-        search.setHintTextColor(MUTED);
-        search.setHint("Търси урок, предмет или клас…");
-        search.setContentDescription("Търсене във всички видео файлове");
-        search.setTextSize(16);
-        search.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
-        browser.addView(search, new LinearLayout.LayoutParams(-1, dp(52)));
+        resume.setMaxLines(2); resume.setGravity(Gravity.CENTER_VERTICAL | Gravity.START); resume.setVisibility(View.GONE);
+        LinearLayout.LayoutParams resumeLp = new LinearLayout.LayoutParams(-1, d(60)); resumeLp.bottomMargin = d(10); browser.addView(resume, resumeLp);
+
+        search = new EditText(this); search.setSingleLine(true); search.setTextSize(16); search.setTextColor(INK); search.setHintTextColor(MUTED);
+        search.setHint("⌕  Намери любим урок…"); search.setContentDescription("Търси урок в моя клас");
+        search.setPadding(d(16), 0, d(16), 0); search.setBackground(round(this, Color.WHITE, 18, Color.TRANSPARENT));
+        search.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
+        search.setOnEditorActionListener((v, action, event) -> {
+            ((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(search.getWindowToken(), 0);
+            grid.requestFocus(); return true;
+        });
         search.addTextChangedListener(new TextWatcher() {
             public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-            public void onTextChanged(CharSequence s, int start, int before, int count) {
-                main.removeCallbacks(filter);
-                main.postDelayed(filter, 200);
-            }
-            public void afterTextChanged(Editable e) {}
+            public void onTextChanged(CharSequence s, int start, int before, int count) { main.removeCallbacks(filter); main.postDelayed(filter, 180); }
+            public void afterTextChanged(Editable text) {}
         });
-        LinearLayout navigation = new LinearLayout(this);
-        navigation.setGravity(Gravity.CENTER_VERTICAL);
-        up = button("↑ Назад", v -> parentFolder());
-        navigation.addView(up, new LinearLayout.LayoutParams(dp(110), dp(48)));
-        breadcrumb = text("Зареждане на каталога…", 14, MUTED);
-        breadcrumb.setMaxLines(2);
-        navigation.addView(breadcrumb, new LinearLayout.LayoutParams(0, -2, 1));
-        browser.addView(navigation);
-        empty = text("", 16, MUTED);
-        empty.setPadding(0, dp(12), 0, dp(12));
-        browser.addView(empty);
-        list = new RecyclerView(this);
-        list.setLayoutManager(new LinearLayoutManager(this));
-        list.setItemAnimator(null);
-        adapter = new Rows();
-        list.setAdapter(adapter);
-        browser.addView(list, new LinearLayout.LayoutParams(-1, 0, 1));
-        TextView footer = text("Изтегля се избраното видео. Кешът се изчиства при затваряне. Нужни са сийдъри.", 12, MUTED);
-        footer.setPadding(0, dp(6), 0, dp(2));
-        browser.addView(footer);
+        browser.addView(search, new LinearLayout.LayoutParams(-1, d(50)));
 
-        playerPanel = column();
-        playerPanel.setBackgroundColor(Color.BLACK);
-        playerPanel.setVisibility(View.GONE);
-        root.addView(playerPanel, match());
-        LinearLayout playerHeader = new LinearLayout(this);
-        playerHeader.setGravity(Gravity.CENTER_VERTICAL);
-        playerHeader.addView(button("← Каталог", v -> stopPlayback(true)), new LinearLayout.LayoutParams(dp(130), dp(52)));
-        playingTitle = text("", 16, INK);
-        playingTitle.setMaxLines(2);
-        playerHeader.addView(playingTitle, new LinearLayout.LayoutParams(0, -2, 1));
-        playerPanel.addView(playerHeader);
-        playerView = new PlayerView(this);
-        playerView.setKeepScreenOn(true);
-        playerView.setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING);
-        playerView.setControllerAutoShow(true);
-        playerView.setControllerHideOnTouch(true);
-        playerPanel.addView(playerView, new LinearLayout.LayoutParams(-1, 0, 1));
-        streamStatus = text("", 13, MINT);
-        streamStatus.setPadding(dp(12), dp(4), dp(12), dp(8));
-        playerPanel.addView(streamStatus);
+        LinearLayout navigation = row();
+        back = button(this, "← Назад", Color.WHITE, v -> goBack());
+        LinearLayout.LayoutParams backLp = new LinearLayout.LayoutParams(d(112), d(44)); backLp.rightMargin = d(10); navigation.addView(back, backLp);
+        section = text(this, "Моята библиотека", 20, INK, true); navigation.addView(section, new LinearLayout.LayoutParams(0, -2, 1));
+        LinearLayout.LayoutParams navLp = new LinearLayout.LayoutParams(-1, d(60)); browser.addView(navigation, navLp);
+
+        empty = text(this, "Само още миг…", 17, MUTED, false); empty.setGravity(Gravity.CENTER); browser.addView(empty);
+        grid = new RecyclerView(this); grid.setClipToPadding(false); grid.setPadding(d(4), d(4), d(4), d(10));
+        layout = new GridLayoutManager(this, 2); grid.setLayoutManager(layout); grid.setItemAnimator(null);
+        adapter = new Cards(); grid.setAdapter(adapter);
+        grid.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob) -> { if (r-l != or-ol) updateColumns(); });
+        browser.addView(grid, new LinearLayout.LayoutParams(-1, 0, 1));
+        TextView footer = text(this, "Малка крачка. Голямо откритие.  ✦", 12, MUTED, false); footer.setGravity(Gravity.CENTER); browser.addView(footer);
+
+        playerPanel = column(); playerPanel.setBackgroundColor(0xFF101529); playerPanel.setVisibility(View.GONE); root.addView(playerPanel, fill());
+        LinearLayout controls = row(); controls.setPadding(d(12), d(8), d(12), d(8));
+        Button close = button(this, "← Моите уроци", 0xFFEDE7FF, v -> stopPlayback(true));
+        controls.addView(close, new LinearLayout.LayoutParams(d(160), d(48)));
+        playerTitle = text(this, "", 17, Color.WHITE, true); playerTitle.setMaxLines(2); playerTitle.setPadding(d(14), 0, 0, 0);
+        controls.addView(playerTitle, new LinearLayout.LayoutParams(0, -2, 1)); playerPanel.addView(controls);
+        playerArea = new FrameLayout(this); playerPanel.addView(playerArea, new LinearLayout.LayoutParams(-1, 0, 1));
+        playerView = new PlayerView(this); playerView.setControllerAutoShow(true); playerView.setKeepScreenOn(true);
+        playerView.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER); playerArea.addView(playerView, fill());
+        loading = column(); loading.setGravity(Gravity.CENTER); loading.setPadding(d(24), d(20), d(24), d(20));
+        loading.setBackground(round(this, 0xFFF0EBFF, 28, Color.TRANSPARENT));
+        loading.addView(new Owl(this), new LinearLayout.LayoutParams(d(100), d(100)));
+        waiting = text(this, "Подготвяме твоя урок…", 20, INK, true); waiting.setGravity(Gravity.CENTER); loading.addView(waiting);
+        TextView hint = text(this, "Още малко и започваме!", 14, MUTED, false); hint.setGravity(Gravity.CENTER); loading.addView(hint);
+        ProgressBar progress = new ProgressBar(this); LinearLayout.LayoutParams progressLp = new LinearLayout.LayoutParams(d(28),d(28)); progressLp.topMargin=d(16); loading.addView(progress,progressLp);
+        FrameLayout.LayoutParams loadingLp = new FrameLayout.LayoutParams(d(300), -2, Gravity.CENTER); playerArea.addView(loading, loadingLp);
+        render();
     }
 
-    private final Runnable filter = this::renderRows;
+    private final Runnable filter = this::render;
+    private int heroHeight() { return d(getResources().getConfiguration().screenHeightDp < 500 ? 92 : 122); }
+    private void updateColumns() {
+        if (layout == null) return;
+        int width = getResources().getConfiguration().screenWidthDp;
+        boolean home = pickingGrade || subject == null && search.length() == 0;
+        int columns = home ? width >= 1000 ? 4 : width >= 650 ? 3 : 2 : width >= 1000 ? 3 : width >= 650 ? 2 : 1;
+        layout.setSpanCount(columns);
+    }
+    @Override public void onConfigurationChanged(Configuration config) {
+        super.onConfigurationChanged(config); hero.getLayoutParams().height=heroHeight(); hero.requestLayout(); updateColumns();
+    }
 
-    private void loadBuiltin() {
-        final int generation = beginLoad();
+    private void loadLibrary() {
         worker.execute(() -> {
-            File file = new File(getFilesDir(), "lessons.torrent");
             try {
-                if (!file.isFile()) {
-                    try (InputStream input = getAssets().open("lessons.torrent")) { copy(input, file); }
+                SafeFiles.deleteTree(new File(getFilesDir(), "active-stream"));
+                File file = new File(getFilesDir(), "lessons.torrent");
+                if (!file.isFile()) try (InputStream in=getAssets().open("lessons.torrent"); FileOutputStream out=new FileOutputStream(file)) {
+                    byte[] bytes=new byte[32768]; int count; while ((count=in.read(bytes))!=-1) out.write(bytes,0,count);
                 }
-                finishLoad(generation, file, Catalog.load(file));
-            } catch (Exception | LinkageError e) { loadFailed(generation, e); }
-        });
-    }
-
-    private int beginLoad() {
-        loading = true;
-        loadGeneration++;
-        builtIn.setEnabled(false); importButton.setEnabled(false);
-        subtitle.setText("Четене на .torrent метаданните…");
-        return loadGeneration;
-    }
-
-    private void finishLoad(int generation, File file, Catalog loaded) {
-        main.post(() -> {
-            if (isDestroyed() || generation != loadGeneration) return;
-            loading = false;
-            torrent = file; catalog = loaded; folder = "";
-            search.setText("");
-            subtitle.setText(String.format(Locale.ROOT, "%s · %,d видеа · %.1f GiB общо", loaded.name,
-                    loaded.videos.size(), loaded.totalSize / (1024.0 * 1024 * 1024)));
-            builtIn.setEnabled(true); importButton.setEnabled(true);
-            renderRows();
-        });
-    }
-
-    private void loadFailed(int generation, Throwable error) {
-        main.post(() -> {
-            if (isDestroyed() || generation != loadGeneration) return;
-            loading = false;
-            builtIn.setEnabled(true); importButton.setEnabled(true);
-            subtitle.setText(catalog == null ? "Каталогът не е зареден" : catalog.name);
-            showError(message(error));
-        });
-    }
-
-    @Override protected void onActivityResult(int request, int result, Intent data) {
-        super.onActivityResult(request, result, data);
-        if (request != PICK_TORRENT || result != RESULT_OK || data == null || data.getData() == null) return;
-        Uri uri = data.getData();
-        final int generation = beginLoad();
-        worker.execute(() -> {
-            File imported = new File(getFilesDir(), "import-" + System.nanoTime() + ".torrent");
-            try {
-                try (InputStream input = getContentResolver().openInputStream(uri)) {
-                    if (input == null) throw new IOException("Файлът не може да се отвори");
-                    copy(input, imported);
-                }
-                Catalog loaded = Catalog.load(imported);
-                // The worker is serial: no playback can be reading an older imported torrent here.
-                File[] previous = getFilesDir().listFiles((dir, name) -> name.startsWith("import-") && name.endsWith(".torrent"));
-                if (previous != null) for (File old : previous) if (!old.equals(imported)) old.delete();
-                finishLoad(generation, imported, loaded);
-            } catch (Exception | LinkageError e) { imported.delete(); loadFailed(generation, e); }
-        });
-    }
-
-    private static void copy(InputStream input, File output) throws IOException {
-        boolean complete = false;
-        try (FileOutputStream out = new FileOutputStream(output)) {
-            byte[] buffer = new byte[32 * 1024];
-            long total = 0;
-            int read;
-            while ((read = input.read(buffer)) != -1) {
-                total += read;
-                if (total > 32L * 1024 * 1024) throw new IOException(".torrent файлът е по-голям от 32 MiB");
-                out.write(buffer, 0, read);
+                LessonLibrary loaded = new LessonLibrary(Catalog.load(file));
+                main.post(() -> { if (!isDestroyed()) { torrent=file; library=loaded; render(); } });
+            } catch (Exception | LinkageError e) {
+                Log.e("Urokche", "Cannot load bundled lessons",e);
+                main.post(() -> { if (!isFinishing()&&!isDestroyed()) new AlertDialog.Builder(this).setTitle("Още един опит?")
+                        .setMessage("Уроците не успяха да се отворят. Нека опитаме отново.")
+                        .setPositiveButton("Опитай пак",(d,w)->loadLibrary()).setNegativeButton("Назад",(d,w)->finish()).show(); });
             }
-            complete = true;
-        } finally { if (!complete) output.delete(); }
+        });
     }
 
-    private void renderRows() {
-        if (catalog == null) return;
-        List<Catalog.Row> rows = catalog.rows(folder, search.getText().toString());
-        adapter.replace(rows);
-        breadcrumb.setText(search.length() > 0 ? "Резултати: " + rows.size() : folder.isEmpty() ? "Всички предмети" : folder);
-        up.setEnabled(!folder.isEmpty() || search.length() > 0);
-        empty.setText(rows.isEmpty() ? "Няма намерени видеа." : "");
-        empty.setVisibility(rows.isEmpty() ? View.VISIBLE : View.GONE);
-    }
-
-    private void parentFolder() {
-        if (search.length() > 0) search.setText("");
-        else if (!folder.isEmpty()) {
-            String withoutSlash = folder.substring(0, folder.length() - 1);
-            folder = withoutSlash.substring(0, withoutSlash.lastIndexOf('/') + 1);
+    private void render() {
+        if (adapter == null) return;
+        updateColumns();
+        List<Tile> tiles=new ArrayList<>();
+        if (library == null) { empty.setVisibility(View.VISIBLE); search.setVisibility(View.GONE); classButton.setVisibility(View.GONE); back.setVisibility(View.GONE); return; }
+        classButton.setVisibility(pickingGrade ? View.GONE : View.VISIBLE); classButton.setText(LessonLibrary.gradeLabel(grade)+" ▾");
+        search.setVisibility(pickingGrade ? View.GONE : View.VISIBLE);
+        resume.setVisibility(View.GONE);
+        if (pickingGrade) {
+            greeting.setText("Здравей, откривателю!"); encouragement.setText("Избери своя клас. Да учим с усмивка!"); section.setText("В кой клас си?");
+            back.setVisibility(grade==-2 ? View.GONE : View.VISIBLE);
+            for (int g=0;g<=12;g++) tiles.add(new Tile(g)); tiles.add(new Tile(-1));
+        } else if (search.length()>0) {
+            greeting.setText("Да открием твоя урок!"); encouragement.setText("Търсим в "+LessonLibrary.gradeLabel(grade).toLowerCase(java.util.Locale.ROOT));
+            section.setText("Намерени уроци"); back.setVisibility(View.VISIBLE);
+            for (LessonLibrary.Entry entry:library.entries(grade,null,"",search.getText().toString())) tiles.add(new Tile(entry,false));
+        } else if (subject==null) {
+            greeting.setText("Какво ще открием днес?"); encouragement.setText("Избери предмет и намери своя следващ урок."); section.setText("Моите предмети"); back.setVisibility(View.GONE);
+            for (LessonLibrary.Entry entry:library.subjects(grade)) tiles.add(new Tile(entry,true));
+            LessonLibrary.Lesson last=library.find(memory.getInt("last-index",-1));
+            if (last!=null && library.forGrade(grade).contains(last) && memory.getLong("last-position",0)>0) {
+                resume.setText("▶  Продължи урока\n"+last.title); resume.setVisibility(View.VISIBLE);
+            }
+        } else {
+            greeting.setText(subject); encouragement.setText("Един урок. Много нови открития!");
+            section.setText(folder.isEmpty() ? "Избери си урок" : folder.substring(0,folder.length()-1).substring(folder.substring(0,folder.length()-1).lastIndexOf('/')+1));
+            back.setVisibility(View.VISIBLE);
+            for (LessonLibrary.Entry entry:library.entries(grade,subject,folder,"")) tiles.add(new Tile(entry,false));
         }
-        renderRows();
+        empty.setText("Няма урок с това име. Опитай с друга дума."); empty.setVisibility(tiles.isEmpty()?View.VISIBLE:View.GONE);
+        adapter.replace(tiles);
     }
 
-    private void play(VideoFile video) {
+    private void chooseGrade(int selected) {
+        grade=selected; memory.edit().putInt("grade",grade).apply(); pickingGrade=false; subject=null; folder=""; render(); grid.scrollToPosition(0);
+    }
+    private void goBack() {
+        if (engine!=null) { stopPlayback(true); return; }
+        if (search.length()>0) search.setText("");
+        else if (pickingGrade && grade!=-2) pickingGrade=false;
+        else if (!folder.isEmpty()) folder=LessonLibrary.parent(folder.substring(0,folder.length()-1));
+        else if (subject!=null) subject=null;
+        else { finish(); return; }
+        render(); grid.scrollToPosition(0);
+    }
+
+    private void play(LessonLibrary.Lesson lesson) {
+        if (library==null || torrent==null) return;
+        long saved=memory.getInt("last-index",-1)==lesson.video.index ? memory.getLong("last-position",0) : 0;
         stopPlayback(false);
-        int generation = ++playGeneration;
-        File selectedTorrent = torrent;
-        StreamEngine selected = new StreamEngine(new File(getFilesDir(), "active-stream"));
-        engine = selected;
-        browser.setVisibility(View.GONE); playerPanel.setVisibility(View.VISIBLE);
-        playingTitle.setText(video.name()); streamStatus.setText("Свързване със сийдърите…");
+        int myGeneration=++generation; current=lesson;
+        memory.edit().putInt("last-index",lesson.video.index).putLong("last-position",saved).apply();
+        StreamEngine selected=new StreamEngine(new File(getFilesDir(),"active-stream")); engine=selected;
+        browser.setVisibility(View.GONE); playerPanel.setVisibility(View.VISIBLE); loading.setVisibility(View.VISIBLE);
+        waiting.setText("Подготвяме твоя урок…"); playerTitle.setText(lesson.title);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         worker.execute(() -> {
             try {
-                selected.start(selectedTorrent, video);
+                selected.start(torrent,lesson.video);
                 main.post(() -> {
-                    if (!resumed || generation != playGeneration || engine != selected) return;
-                    player = new ExoPlayer.Builder(this).setLoadControl(new DefaultLoadControl.Builder()
-                            .setBufferDurationsMs(5_000, 25_000, 1_000, 2_000).build()).build();
+                    if (!resumed || generation!=myGeneration || engine!=selected) return;
+                    player=new ExoPlayer.Builder(this).setLoadControl(new DefaultLoadControl.Builder().setBufferDurationsMs(5000,25000,1000,2000).build()).build();
                     playerView.setPlayer(player);
                     player.addListener(new Player.Listener() {
-                        @Override public void onPlayerError(PlaybackException error) {
-                            stopPlayback(true);
-                            showError("Видеото не може да се пусне. " + message(error.getCause() == null ? error : error.getCause())
-                                    + "\nПровери сийдърите, връзката и поддръжката на кодека на устройството.");
-                        }
+                        @Override public void onPlayerError(PlaybackException error) { lessonError(lesson,error); }
                         @Override public void onPlaybackStateChanged(int state) {
-                            if (state == Player.STATE_ENDED) stopPlayback(true);
+                            loading.setVisibility(state==Player.STATE_BUFFERING ? View.VISIBLE : View.GONE);
+                            if (state==Player.STATE_READY) { playerView.requestFocus(); }
+                            if (state==Player.STATE_ENDED) completed(lesson);
                         }
                     });
-                    MediaItem media = MediaItem.fromUri(Uri.parse("torrent://video/" + video.index));
-                    player.setMediaSource(new ProgressiveMediaSource.Factory(() -> new TorrentDataSource(selected, video))
-                            .setLoadErrorHandlingPolicy(new DefaultLoadErrorHandlingPolicy(0)).createMediaSource(media));
-                    player.prepare(); player.play();
-                    playerView.requestFocus(); playerView.showController();
+                    MediaItem item=MediaItem.fromUri(Uri.parse("torrent://lesson/"+lesson.video.index));
+                    player.setMediaSource(new ProgressiveMediaSource.Factory(() -> new TorrentDataSource(selected,lesson.video))
+                            .setLoadErrorHandlingPolicy(new DefaultLoadErrorHandlingPolicy(0)).createMediaSource(item));
+                    if (saved>0) player.seekTo(saved);
+                    player.prepare(); player.play(); playerView.requestFocus();
                 });
-            } catch (Exception | LinkageError e) {
-                main.post(() -> {
-                    if (generation != playGeneration || isDestroyed()) return;
-                    stopPlayback(true); showError(message(e));
-                });
-            }
+            } catch (Exception | LinkageError error) { main.post(() -> { if (generation==myGeneration&&!isDestroyed()) lessonError(lesson,error); }); }
         });
     }
 
-    private void stopPlayback(boolean showCatalog) {
-        playGeneration++;
-        StreamEngine old = engine;
-        engine = null;
-        if (old != null) old.cancel(); // Unblock Media3 before release waits for its playback thread.
-        if (player != null) {
-            playerView.setPlayer(null); player.release(); player = null;
+    private void completed(LessonLibrary.Lesson lesson) {
+        memory.edit().putBoolean("done."+lesson.video.index,true).putInt("last-index",-1).putLong("last-position",0).apply();
+        stopPlayback(true,false);
+        LessonLibrary.Lesson next=library.next(lesson,grade);
+        AlertDialog.Builder dialog=new AlertDialog.Builder(this).setTitle("Браво, откривателю!  ★")
+                .setMessage("Още един научен урок. Чудесна работа!")
+                .setNegativeButton("Моите уроци",null);
+        if (next!=null) dialog.setPositiveButton("Следващ урок",(d,w)->play(next));
+        else dialog.setPositiveButton("Супер!",null);
+        dialog.show();
+    }
+    private void lessonError(LessonLibrary.Lesson lesson,Throwable error) {
+        Log.e("Urokche","Lesson playback failed",error); stopPlayback(true);
+        if (isFinishing()||isDestroyed()) return;
+        String message="Урокът не успя да се зареди. Можеш да опиташ пак или да избереш друг.";
+        if (error.getMessage()!=null&&error.getMessage().contains("място")) message="Паметта на устройството е почти пълна. Помоли възрастен за помощ.";
+        new AlertDialog.Builder(this).setTitle("Още един опит?").setMessage(message)
+                .setPositiveButton("Опитай пак",(d,w)->play(lesson)).setNegativeButton("Друг урок",null).show();
+    }
+
+    private void stopPlayback(boolean show) { stopPlayback(show,true); }
+    private void stopPlayback(boolean show,boolean save) {
+        generation++;
+        StreamEngine old=engine; engine=null; if (old!=null) old.cancel();
+        if (player!=null) {
+            if (save&&current!=null&&player.getCurrentPosition()>0) memory.edit().putInt("last-index",current.video.index).putLong("last-position",player.getCurrentPosition()).apply();
+            playerView.setPlayer(null); player.release(); player=null;
         }
-        if (old != null) worker.execute(() -> {
-            try { old.close(); }
-            catch (IOException e) { main.post(() -> { if (resumed) showError(e.getMessage()); }); }
-        });
+        if (old!=null) worker.execute(() -> { try { old.close(); } catch (IOException e) { Log.e("Urokche","Cache cleanup",e); } });
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        if (showCatalog) {
-            playerPanel.setVisibility(View.GONE); browser.setVisibility(View.VISIBLE);
-            list.requestFocus();
-        }
+        if (show) { playerPanel.setVisibility(View.GONE); browser.setVisibility(View.VISIBLE); render(); grid.requestFocus(); }
     }
-
-    private final Runnable tick = new Runnable() {
-        @Override public void run() {
-            StreamEngine current = engine;
-            if (current != null && current.ready) worker.execute(() -> {
-                String stats = current.stats();
-                main.post(() -> { if (engine == current) streamStatus.setText(stats); });
-            });
-            if (resumed) main.postDelayed(this, 1000);
-        }
-    };
-    @Override protected void onStart() { super.onStart(); resumed = true; main.post(tick); }
-    @Override protected void onStop() {
-        resumed = false; main.removeCallbacks(tick);
-        stopPlayback(true);
-        super.onStop();
-    }
+    @Override protected void onStart() { super.onStart(); resumed=true; }
+    @Override protected void onStop() { resumed=false; stopPlayback(true); super.onStop(); }
     @Override protected void onDestroy() { main.removeCallbacksAndMessages(null); worker.shutdown(); super.onDestroy(); }
     @Override public void onBackPressed() { goBack(); }
-    private void goBack() {
-        if (engine != null) stopPlayback(true);
-        else if (search.length() > 0 || !folder.isEmpty()) parentFolder();
-        else finish();
-    }
-    @Override public boolean dispatchKeyEvent(KeyEvent event) {
-        if (player != null && playerView.dispatchMediaKeyEvent(event)) return true;
-        return super.dispatchKeyEvent(event);
-    }
+    @Override public boolean dispatchKeyEvent(KeyEvent event) { return player!=null&&playerView.dispatchMediaKeyEvent(event)||super.dispatchKeyEvent(event); }
+    private int d(int value) { return dp(this,value); }
+    private LinearLayout column() { LinearLayout v=new LinearLayout(this); v.setOrientation(LinearLayout.VERTICAL); return v; }
+    private LinearLayout row() { LinearLayout v=new LinearLayout(this); v.setGravity(Gravity.CENTER_VERTICAL); return v; }
+    private FrameLayout.LayoutParams fill() { return new FrameLayout.LayoutParams(-1,-1); }
 
-    private void showError(String message) {
-        if (isFinishing() || isDestroyed()) return;
-        new AlertDialog.Builder(this).setTitle("UrokStream").setMessage(message).setPositiveButton("Добре", null).show();
+    private static final class Tile {
+        final LessonLibrary.Entry entry; final int grade; final boolean subject;
+        Tile(int grade) { this.grade=grade; this.entry=null; this.subject=false; }
+        Tile(LessonLibrary.Entry entry,boolean subject) { this.entry=entry; this.subject=subject; this.grade=-2; }
     }
-    private static String message(Throwable e) { return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage(); }
-    private int dp(int value) { return (int) (value * getResources().getDisplayMetrics().density + .5f); }
-    private LinearLayout column() { LinearLayout layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL); return layout; }
-    private FrameLayout.LayoutParams match() { return new FrameLayout.LayoutParams(-1, -1); }
-    private TextView text(String value, int sp, int color) {
-        TextView text = new TextView(this); text.setText(value); text.setTextSize(sp); text.setTextColor(color); return text;
-    }
-    private Button button(String label, View.OnClickListener click) {
-        Button b = new Button(this); b.setText(label); b.setTextColor(INK); b.setTextSize(13); b.setAllCaps(false);
-        b.setMinWidth(0); b.setMinimumWidth(0); b.setOnClickListener(click); return b;
-    }
-
-    private GradientDrawable tile(int color, int stroke) {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(color); drawable.setCornerRadius(dp(10));
-        drawable.setStroke(dp(2), stroke); return drawable;
-    }
-
-    private final class Rows extends RecyclerView.Adapter<RowHolder> {
-        private List<Catalog.Row> rows = new ArrayList<>();
-        void replace(List<Catalog.Row> value) { rows = value; notifyDataSetChanged(); }
-        @Override public RowHolder onCreateViewHolder(ViewGroup parent, int type) {
-            LinearLayout item = column(); item.setPadding(dp(14), dp(12), dp(14), dp(12));
-            item.setFocusable(true); item.setClickable(true); item.setMinimumHeight(dp(72));
-            StateListDrawable states = new StateListDrawable();
-            states.addState(new int[]{android.R.attr.state_focused}, tile(Color.rgb(33, 68, 72), MINT));
-            states.addState(new int[]{android.R.attr.state_pressed}, tile(Color.rgb(33, 68, 72), MINT));
-            states.addState(new int[]{}, tile(Color.rgb(23, 36, 54), Color.TRANSPARENT));
-            item.setBackground(states);
-            RecyclerView.LayoutParams lp = new RecyclerView.LayoutParams(-1, -2); lp.bottomMargin = dp(6); item.setLayoutParams(lp);
-            TextView title = text("", 16, INK); title.setMaxLines(3); item.addView(title);
-            TextView detail = text("", 12, MUTED); detail.setMaxLines(2); item.addView(detail);
-            return new RowHolder(item, title, detail);
+    private final class Cards extends RecyclerView.Adapter<Holder> {
+        private List<Tile> tiles=new ArrayList<>();
+        void replace(List<Tile> value) { tiles=value; notifyDataSetChanged(); }
+        @Override public Holder onCreateViewHolder(ViewGroup parent,int type) {
+            LinearLayout card=column(); card.setPadding(d(17),d(14),d(17),d(14)); card.setGravity(Gravity.CENTER_VERTICAL);
+            card.setElevation(d(1));
+            RecyclerView.LayoutParams lp=new RecyclerView.LayoutParams(-1,-2); lp.setMargins(d(5),d(5),d(5),d(7)); card.setLayoutParams(lp);
+            TextView symbol=text(MainActivity.this,"",30,PURPLE,true); symbol.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO); card.addView(symbol);
+            TextView title=text(MainActivity.this,"",18,INK,true); title.setMaxLines(3); card.addView(title);
+            TextView detail=text(MainActivity.this,"",13,MUTED,false); detail.setPadding(0,d(6),0,0); detail.setMaxLines(2); card.addView(detail);
+            return new Holder(card,symbol,title,detail);
         }
-        @Override public void onBindViewHolder(RowHolder holder, int position) {
-            Catalog.Row row = rows.get(position);
-            holder.title.setText((row.video == null ? "▸  " : "▶  ") + row.title);
-            holder.detail.setText(row.video == null ? row.count + " видеа" : String.format(Locale.ROOT, "%.1f MiB · %s", row.video.size / (1024.0 * 1024), row.video.path));
-            holder.itemView.setOnClickListener(v -> {
-                if (loading) return;
-                if (row.video == null) { folder = row.folder; renderRows(); list.scrollToPosition(0); }
-                else play(row.video);
+        @Override public void onBindViewHolder(Holder h,int position) {
+            Tile tile=tiles.get(position); LessonLibrary.Entry e=tile.entry;
+            boolean completed=e!=null&&e.lesson!=null&&memory.getBoolean("done."+e.lesson.video.index,false);
+            int background=e==null ? COLORS[Math.floorMod(tile.grade,COLORS.length)] : tile.subject ? color(e.title) : e.lesson==null ? 0xFFF0EBFF : completed ? 0xFFEAF8F1 : Color.WHITE;
+            interactive(h.itemView,background,22);
+            h.symbol.setTextSize(e==null||tile.subject?30:23);
+            h.itemView.setMinimumHeight(d(e==null||tile.subject?148:126));
+            if (e==null) {
+                h.symbol.setText(tile.grade<0?"✦":tile.grade==0?"🌻":String.valueOf(tile.grade));
+                h.title.setText(LessonLibrary.gradeLabel(tile.grade)); h.detail.setText(tile.grade<0?"Цялата библиотека  →":"Моето приключение  →");
+            } else if (tile.subject) {
+                h.symbol.setText(icon(e.title)); h.title.setText(e.title); h.detail.setText(e.count+" урока за откриване  →");
+            } else if (e.lesson==null) {
+                h.symbol.setText("📚"); h.title.setText(e.title); h.detail.setText(e.count+" урока  →");
+            } else {
+                h.symbol.setText(completed?"★":"▶"); h.symbol.setTextSize(23);
+                h.title.setText(e.lesson.title);
+                h.detail.setText(completed?"Научено! Браво на теб.":search.length()>0?e.lesson.subject+" · "+LessonLibrary.gradeLabel(e.lesson.grade):"Гледай урока");
+            }
+            h.itemView.setContentDescription(h.title.getText()+". "+h.detail.getText());
+            h.itemView.setOnClickListener(v -> {
+                if (e==null) chooseGrade(tile.grade);
+                else if (tile.subject) { subject=e.title; folder=""; render(); grid.scrollToPosition(0); }
+                else if (e.lesson==null) { folder=e.folder; render(); grid.scrollToPosition(0); }
+                else play(e.lesson);
             });
         }
-        @Override public int getItemCount() { return rows.size(); }
+        @Override public int getItemCount() { return tiles.size(); }
     }
-    private static final class RowHolder extends RecyclerView.ViewHolder {
-        final TextView title, detail;
-        RowHolder(View item, TextView title, TextView detail) { super(item); this.title = title; this.detail = detail; }
+    private static final class Holder extends RecyclerView.ViewHolder {
+        final TextView symbol,title,detail;
+        Holder(View view,TextView symbol,TextView title,TextView detail) { super(view); this.symbol=symbol; this.title=title; this.detail=detail; }
     }
 }

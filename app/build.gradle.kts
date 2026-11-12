@@ -8,7 +8,7 @@ android {
         minSdk = 24
         targetSdk = 35
         versionCode = providers.gradleProperty("buildNumber").orElse("1").get().toInt()
-        versionName = "0.1.${providers.gradleProperty("buildNumber").orElse("1").get()}"
+        versionName = "0.2.${providers.gradleProperty("buildNumber").orElse("1").get()}"
         ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64") }
     }
     compileOptions {
