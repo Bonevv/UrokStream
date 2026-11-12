@@ -38,6 +38,22 @@ public class LibraryUiTest {
     @Test @Config(qualifiers="w800dp-h1000dp-mdpi") public void tabletCanOpenAClassAndItsNumberedLessons()throws Exception{check(800,1000,"tablet");}
     @Test @Config(qualifiers="w1000dp-h600dp-mdpi") public void tvLayoutHasFocusableClassesAndLessonRows()throws Exception{check(1000,600,"tv");}
 
+    @Test @Config(qualifiers="w1000dp-h600dp-mdpi") public void equallyNamedSectionsHaveDistinctWorkingJumpButtons()throws Exception{
+        try(ActivityController<PreviewActivity> controller=Robolectric.buildActivity(PreviewActivity.class).setup()){
+            View decor=controller.get().getWindow().getDecorView();View grade=null;
+            for(int i=0;i<1000&&grade==null;i++){shadowOf(Looper.getMainLooper()).idle();layout(decor,1000,600);grade=findDescription(decor,"Български език, 2. клас");if(grade==null)Thread.sleep(10);}
+            assertNotNull(grade);grade.performClick();shadowOf(Looper.getMainLooper()).idle();layout(decor,1000,600);
+            View first=findText(decor,"Седми раздел · Литературни и фолклорни текстове");View second=findText(decor,"Девети раздел · Литературни и фолклорни текстове");
+            assertNotNull(first);assertNotNull(second);assertNotSame(first,second);
+            androidx.recyclerview.widget.RecyclerView list=(androidx.recyclerview.widget.RecyclerView)findRecycler(decor);
+            first.performClick();shadowOf(Looper.getMainLooper()).idleFor(200,java.util.concurrent.TimeUnit.MILLISECONDS);layout(decor,1000,600);
+            int firstPosition=((androidx.recyclerview.widget.LinearLayoutManager)list.getLayoutManager()).findFirstVisibleItemPosition();
+            second.performClick();shadowOf(Looper.getMainLooper()).idleFor(200,java.util.concurrent.TimeUnit.MILLISECONDS);layout(decor,1000,600);
+            int secondPosition=((androidx.recyclerview.widget.LinearLayoutManager)list.getLayoutManager()).findFirstVisibleItemPosition();
+            assertNotEquals(firstPosition,secondPosition);
+        }
+    }
+
     private void check(int width,int height,String name)throws Exception{
         try(ActivityController<PreviewActivity> controller=Robolectric.buildActivity(PreviewActivity.class).setup()){
             PreviewActivity activity=controller.get();View decor=activity.getWindow().getDecorView();
@@ -58,6 +74,7 @@ public class LibraryUiTest {
     }
     private static void layout(View view,int w,int h){view.measure(View.MeasureSpec.makeMeasureSpec(w,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(h,View.MeasureSpec.EXACTLY));view.layout(0,0,w,h);}
     private static View findDescription(View v,String value){if(value.contentEquals(v.getContentDescription()==null?"":v.getContentDescription()))return v;if(v instanceof ViewGroup){ViewGroup g=(ViewGroup)v;for(int i=0;i<g.getChildCount();i++){View x=findDescription(g.getChildAt(i),value);if(x!=null)return x;}}return null;}
+    private static View findRecycler(View v){if(v instanceof androidx.recyclerview.widget.RecyclerView)return v;if(v instanceof ViewGroup){ViewGroup g=(ViewGroup)v;for(int i=0;i<g.getChildCount();i++){View x=findRecycler(g.getChildAt(i));if(x!=null)return x;}}return null;}
     private static View findDescriptionPrefix(View v,String value){if(v.getContentDescription()!=null&&v.getContentDescription().toString().startsWith(value))return v;if(v instanceof ViewGroup){ViewGroup g=(ViewGroup)v;for(int i=0;i<g.getChildCount();i++){View x=findDescriptionPrefix(g.getChildAt(i),value);if(x!=null)return x;}}return null;}
     private static View findText(View v,String value){if(v instanceof TextView&&value.contentEquals(((TextView)v).getText()))return v;if(v instanceof ViewGroup){ViewGroup g=(ViewGroup)v;for(int i=0;i<g.getChildCount();i++){View x=findText(g.getChildAt(i),value);if(x!=null)return x;}}return null;}
     private static void screenshot(View view,int w,int h,String name)throws Exception{

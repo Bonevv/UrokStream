@@ -169,7 +169,7 @@ public class MainActivity extends Activity {
         if(library==null){empty.setVisibility(View.VISIBLE);tabs.setVisibility(View.GONE);back.setVisibility(View.GONE);sectionsButton.setVisibility(View.GONE);sectionRail.setVisibility(View.GONE);return;}
         boolean searching=search.length()>0,home=subject==null&&!searching;
         tabs.setVisibility(home?View.VISIBLE:View.GONE);back.setVisibility(home?View.GONE:View.VISIBLE);resume.setVisibility(View.GONE);
-        classButton.setVisibility(group.equals("school")||subject!=null?View.VISIBLE:View.GONE);classButton.setText(subject!=null?"Друг клас":grade<0?"Моят клас":grade+". клас");
+        classButton.setVisibility(group.equals("school")||subject!=null?View.VISIBLE:View.GONE);classButton.setText(subject!=null?(group.equals("preschool")?"Друга група":group.equals("languages")?"Друго ниво":group.equals("more")?"Курсове":"Друг клас"):grade<0?"Моят клас":grade+". клас");
         for(int i=0;i<tabButtons.size();i++){Button b=tabButtons.get(i);interactive(b,group.equals(GROUPS[i])?BLUE:Color.WHITE,22,BLUE);b.setTextColor(group.equals(GROUPS[i])?Color.WHITE:INK);}
         hero.setBackgroundColor(course!=null?color(course.subject.name):Color.WHITE);greeting.setTextColor(course!=null?Color.WHITE:INK);description.setTextColor(course!=null?Color.WHITE:MUTED);
         if(searching){greeting.setText("Намери своя урок");description.setText(course==null?"Търсене в наличните видео уроци":course.subject.name+" · "+course.label);screenTitle.setText("Резултати");for(SchoolCatalog.Lesson l:library.search(search.getText().toString(),course,group.equals("school")?grade:-1))rows.add(Tile.lesson(l));}
@@ -178,11 +178,12 @@ public class MainActivity extends Activity {
             String previous=null;
             for(SchoolCatalog.Lesson l:course.lessons){
                 String title=l.sectionTitle.isEmpty()?"Още налични уроци":l.sectionTitle;
-                if(!title.equals(previous)&&!l.sectionTitle.isEmpty()){
-                    if(!chapterPositions.containsKey(title))chapterPositions.put(title,rows.size());
+                String key=l.sectionLabel+"\t"+title;
+                if(!key.equals(previous)&&!l.sectionTitle.isEmpty()){
+                    if(!chapterPositions.containsKey(key))chapterPositions.put(key,rows.size());
                     rows.add(Tile.chapter(l.sectionLabel,title));
-                }else if(previous!=null&&!title.equals(previous))rows.add(Tile.chapter("",title));
-                rows.add(Tile.lesson(l));previous=title;
+                }else if(previous!=null&&!key.equals(previous))rows.add(Tile.chapter("",title));
+                rows.add(Tile.lesson(l));previous=key;
             }
             rebuildSidebar();
         }else if(subject!=null){greeting.setText(subject.name);description.setText("Избери клас или ниво");screenTitle.setText("Класове и нива");for(SchoolCatalog.Course c:subject.courses)rows.add(Tile.course(c));}
@@ -198,13 +199,14 @@ public class MainActivity extends Activity {
     }
     private void rebuildSidebar(){
         sidebar.removeAllViews();sidebar.addView(text(this,"Раздели",23,MUTED,true));
-        for(String title:chapterPositions.keySet()){
-            Button b=button(this,title,BG,INK,v->jumpToChapter(title));b.setTextSize(16);b.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);b.setMaxLines(4);b.setMinHeight(d(60));
+        for(String key:chapterPositions.keySet()){
+            Button b=button(this,chapterCaption(key),BG,INK,v->jumpToChapter(key));b.setTextSize(16);b.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);b.setMaxLines(5);b.setMinHeight(d(60));
             LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=d(8);sidebar.addView(b,lp);
         }
     }
     private void jumpToChapter(String title){Integer position=chapterPositions.get(title);if(position==null)return;grid.scrollToPosition(position);main.postDelayed(()->{RecyclerView.ViewHolder h=grid.findViewHolderForAdapterPosition(position+1);if(h!=null)h.itemView.requestFocus();},120);}
-    private void pickChapter(){String[] labels=chapterPositions.keySet().toArray(new String[0]);new AlertDialog.Builder(this).setTitle("Раздели").setItems(labels,(d,w)->jumpToChapter(labels[w])).setNegativeButton("Назад",null).show();}
+    private String chapterCaption(String key){String[] p=key.split("\t",2);for(String other:chapterPositions.keySet())if(!other.equals(key)&&other.endsWith("\t"+p[1]))return p[0].isEmpty()?p[1]:p[0]+" · "+p[1];return p[1];}
+    private void pickChapter(){String[] keys=chapterPositions.keySet().toArray(new String[0]);String[] labels=new String[keys.length];for(int i=0;i<keys.length;i++)labels[i]=chapterCaption(keys[i]);new AlertDialog.Builder(this).setTitle("Раздели").setItems(labels,(d,w)->jumpToChapter(keys[w])).setNegativeButton("Назад",null).show();}
     private void pickGrade(){String[] labels=new String[13];labels[0]="Всички класове";for(int i=1;i<=12;i++)labels[i]=i+". клас";new AlertDialog.Builder(this).setTitle("Моят клас").setSingleChoiceItems(labels,grade<0?0:grade,(dialog,which)->{grade=which==0?-1:which;memory.edit().putInt("school-grade",grade).apply();dialog.dismiss();render();grid.scrollToPosition(0);}).setNegativeButton("Назад",null).show();}
     private void openCourse(SchoolCatalog.Course selected){subject=selected.subject;course=selected;group=subject.group;search.setText("");render();grid.scrollToPosition(0);}
     private void goHome(){if(engine!=null)stopPlayback(false);subject=null;course=null;search.setText("");browser.setVisibility(View.VISIBLE);playerPanel.setVisibility(View.GONE);render();grid.scrollToPosition(0);}
