@@ -22,8 +22,10 @@ import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
@@ -40,326 +42,256 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import static bg.urokstream.KidStyle.*;
+import static bg.urokstream.SchoolStyle.*;
 
 @UnstableApi
-public final class MainActivity extends Activity {
-    private final Handler main = new Handler(Looper.getMainLooper());
-    private final ExecutorService worker = Executors.newSingleThreadExecutor();
+public class MainActivity extends Activity {
+    private final Handler main=new Handler(Looper.getMainLooper());
+    private final ExecutorService worker=Executors.newSingleThreadExecutor();
     private SharedPreferences memory;
-    private FrameLayout root, playerArea;
-    private LinearLayout browser, playerPanel, hero, loading;
-    private TextView greeting, encouragement, section, empty, playerTitle, waiting;
-    private Button back, classButton, resume;
+    private LinearLayout browser,hero,playerPanel,loading,sidebar,nav;
+    private FrameLayout root;
+    private HorizontalScrollView tabs;
+    private ScrollView sectionRail;
+    private TextView greeting,description,screenTitle,empty,playerTitle;
     private EditText search;
+    private Button homeButton,classButton,back,sectionsButton,resume;
     private RecyclerView grid;
     private GridLayoutManager layout;
-    private Cards adapter;
+    private Rows adapter;
     private PlayerView playerView;
     private ExoPlayer player;
     private StreamEngine engine;
-    private LessonLibrary library;
-    private LessonLibrary.Lesson current;
-    private String subject, folder = "";
+    private SchoolCatalog library;
+    private SchoolCatalog.Subject subject;
+    private SchoolCatalog.Course course;
+    private SchoolCatalog.Lesson current;
+    private String group="school";
+    private int grade=-1,generation;
+    private boolean resumed;
     private File torrent;
-    private int grade = -2, generation;
-    private boolean pickingGrade, resumed;
+    private final Map<String,Integer> chapterPositions=new LinkedHashMap<>();
+    private final List<Button> tabButtons=new ArrayList<>();
+    private static final String[] GROUPS={"school","languages","preschool","more"};
+    private static final String[] GROUP_LABELS={"Предмети","Чужди езици","Предучилищна","Още"};
 
-    @Override public void onCreate(Bundle state) {
+    @Override public void onCreate(Bundle state){
         super.onCreate(state);
-        memory = getSharedPreferences("my-learning", MODE_PRIVATE);
-        grade = memory.getInt("grade", -2); pickingGrade = grade == -2;
-        if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(0, this::goBack);
-        createUi(); loadLibrary();
+        memory=getSharedPreferences("my-learning",MODE_PRIVATE);
+        grade=memory.getInt("school-grade",-1);
+        if(Build.VERSION.SDK_INT>=33)getOnBackInvokedDispatcher().registerOnBackInvokedCallback(0,this::goBack);
+        createUi();loadLibrary();
     }
+    private void createUi(){
+        root=new FrameLayout(this);root.setBackgroundColor(BLUE);
+        root.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(i.getSystemWindowInsetLeft(),i.getSystemWindowInsetTop(),i.getSystemWindowInsetRight(),i.getSystemWindowInsetBottom());return i;});
+        setContentView(root);browser=column();browser.setBackgroundColor(BG);root.addView(browser,fill());
+        LinearLayout toolbar=row();toolbar.setPadding(d(12),d(6),d(12),d(6));toolbar.setBackgroundColor(BLUE);
+        homeButton=button(this,"⌂",BLUE,Color.WHITE,v->goHome());homeButton.setContentDescription("Всички предмети");
+        toolbar.addView(homeButton,new LinearLayout.LayoutParams(d(44),d(44)));
+        TextView brand=text(this,"Уча.се",26,YELLOW,true);brand.setPadding(d(10),0,0,0);toolbar.addView(brand,new LinearLayout.LayoutParams(0,-2,1));
+        classButton=button(this,"Моят клас",Color.WHITE,BLUE,v->{if(subject!=null){course=null;search.setText("");render();grid.scrollToPosition(0);}else pickGrade();});
+        toolbar.addView(classButton,new LinearLayout.LayoutParams(-2,d(44)));browser.addView(toolbar,new LinearLayout.LayoutParams(-1,d(60)));
 
-    private void createUi() {
-        root = new FrameLayout(this); root.setBackgroundColor(BG);
-        root.setOnApplyWindowInsetsListener((v, insets) -> {
-            v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
-            return insets;
-        });
-        setContentView(root);
-        browser = column(); browser.setPadding(d(20), d(8), d(20), d(8)); root.addView(browser, fill());
-        LinearLayout top = row();
-        TextView brand = text(this, "УчаСе", 24, PURPLE, true);
-        brand.setContentDescription("УчаСе, моята библиотека с уроци");
-        top.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
-        classButton = button(this, "Моят клас", Color.WHITE, v -> { pickingGrade = true; search.setText(""); render(); grid.scrollToPosition(0); });
-        top.addView(classButton, new LinearLayout.LayoutParams(-2, d(48)));
-        browser.addView(top, new LinearLayout.LayoutParams(-1, d(54)));
-
-        hero = row(); hero.setPadding(d(18), d(6), d(8), d(6)); hero.setBackground(round(this, 0xFFF0EBFF, 26, Color.TRANSPARENT));
-        LinearLayout welcome = column();
-        greeting = text(this, "Здравей, откривателю!", 23, INK, true); welcome.addView(greeting);
-        encouragement = text(this, "Подреждаме твоите уроци…", 14, MUTED, false); welcome.addView(encouragement);
-        hero.addView(welcome, new LinearLayout.LayoutParams(0, -2, 1));
-        hero.addView(new Owl(this), new LinearLayout.LayoutParams(d(100), -1));
-        LinearLayout.LayoutParams heroLp = new LinearLayout.LayoutParams(-1, heroHeight()); heroLp.topMargin = d(8); heroLp.bottomMargin = d(12); browser.addView(hero, heroLp);
-
-        resume = button(this, "▶  Продължи урока", MINT, v -> {
-            LessonLibrary.Lesson last = library == null ? null : library.find(memory.getInt("last-index", -1));
-            if (last != null) play(last);
-        });
-        resume.setMaxLines(2); resume.setGravity(Gravity.CENTER_VERTICAL | Gravity.START); resume.setVisibility(View.GONE);
-        LinearLayout.LayoutParams resumeLp = new LinearLayout.LayoutParams(-1, d(60)); resumeLp.bottomMargin = d(10); browser.addView(resume, resumeLp);
-
-        search = new EditText(this); search.setSingleLine(true); search.setTextSize(16); search.setTextColor(INK); search.setHintTextColor(MUTED);
-        search.setHint("⌕  Намери любим урок…"); search.setContentDescription("Търси урок в моя клас");
-        search.setPadding(d(16), 0, d(16), 0); search.setBackground(round(this, Color.WHITE, 18, Color.TRANSPARENT));
+        hero=column();hero.setPadding(d(22),d(15),d(22),d(15));
+        greeting=text(this,"Уроци за всеки клас",29,INK,true);hero.addView(greeting);
+        description=text(this,"Подреждаме твоята библиотека…",16,MUTED,false);hero.addView(description);browser.addView(hero);
+        LinearLayout tools=column();tools.setPadding(d(16),d(8),d(16),0);browser.addView(tools);
+        resume=button(this,"▶  Продължи урока",0xFFFFF5B0,INK,v->{SchoolCatalog.Lesson l=library==null?null:library.find(memory.getInt("last-index",-1));if(l!=null)play(l);});
+        resume.setMaxLines(2);resume.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);resume.setVisibility(View.GONE);
+        LinearLayout.LayoutParams resumeLp=new LinearLayout.LayoutParams(-1,d(58));resumeLp.bottomMargin=d(8);tools.addView(resume,resumeLp);
+        search=new EditText(this);search.setSingleLine(true);search.setTextSize(17);search.setTextColor(INK);search.setHintTextColor(MUTED);
+        search.setTypeface(android.graphics.Typeface.create("sans-serif-condensed",android.graphics.Typeface.NORMAL));search.setHint("Търси заглавие на урок");search.setContentDescription("Търсене на видео урок");
+        search.setPadding(d(15),0,d(15),0);search.setBackground(round(this,Color.WHITE,24,BORDER,1));
         search.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
-        search.setOnEditorActionListener((v, action, event) -> {
-            ((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(search.getWindowToken(), 0);
-            grid.requestFocus(); return true;
-        });
-        search.addTextChangedListener(new TextWatcher() {
-            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-            public void onTextChanged(CharSequence s, int start, int before, int count) { main.removeCallbacks(filter); main.postDelayed(filter, 180); }
-            public void afterTextChanged(Editable text) {}
-        });
-        browser.addView(search, new LinearLayout.LayoutParams(-1, d(50)));
+        search.setOnEditorActionListener((v,a,e)->{((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(search.getWindowToken(),0);grid.requestFocus();return true;});
+        search.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int c,int f){}public void afterTextChanged(Editable e){}public void onTextChanged(CharSequence s,int a,int b,int c){main.removeCallbacks(filter);main.postDelayed(filter,180);}});
+        tools.addView(search,new LinearLayout.LayoutParams(-1,d(48)));
 
-        LinearLayout navigation = row();
-        back = button(this, "← Назад", Color.WHITE, v -> goBack());
-        LinearLayout.LayoutParams backLp = new LinearLayout.LayoutParams(d(112), d(44)); backLp.rightMargin = d(10); navigation.addView(back, backLp);
-        section = text(this, "Моята библиотека", 20, INK, true); navigation.addView(section, new LinearLayout.LayoutParams(0, -2, 1));
-        LinearLayout.LayoutParams navLp = new LinearLayout.LayoutParams(-1, d(60)); browser.addView(navigation, navLp);
+        tabs=new HorizontalScrollView(this);tabs.setHorizontalScrollBarEnabled(false);LinearLayout tabRow=row();tabRow.setPadding(d(16),d(10),d(16),d(6));tabs.addView(tabRow);
+        for(int i=0;i<GROUPS.length;i++){final int k=i;Button b=button(this,GROUP_LABELS[i],Color.WHITE,INK,v->{group=GROUPS[k];subject=null;course=null;search.setText("");render();grid.scrollToPosition(0);});LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-2,d(44));lp.rightMargin=d(8);tabRow.addView(b,lp);tabButtons.add(b);}
+        browser.addView(tabs);
+        nav=row();nav.setPadding(d(16),d(6),d(16),d(6));
+        back=button(this,"← Назад",Color.WHITE,INK,v->goBack());LinearLayout.LayoutParams backLp=new LinearLayout.LayoutParams(d(105),d(44));backLp.rightMargin=d(12);nav.addView(back,backLp);
+        screenTitle=text(this,"Всички предмети",20,INK,true);nav.addView(screenTitle,new LinearLayout.LayoutParams(0,-2,1));
+        sectionsButton=button(this,"Раздели ▾",Color.WHITE,BLUE,v->pickChapter());nav.addView(sectionsButton,new LinearLayout.LayoutParams(-2,d(44)));browser.addView(nav);
+        empty=text(this,"Само още миг…",18,MUTED,false);empty.setGravity(Gravity.CENTER);browser.addView(empty);
+        LinearLayout body=new LinearLayout(this);browser.addView(body,new LinearLayout.LayoutParams(-1,0,1));
+        sectionRail=new ScrollView(this);sidebar=column();sidebar.setPadding(d(18),d(8),d(12),d(12));sectionRail.addView(sidebar);body.addView(sectionRail,new LinearLayout.LayoutParams(d(235),-1));
+        grid=new RecyclerView(this);grid.setClipToPadding(false);grid.setPadding(d(12),d(4),d(12),d(14));layout=new GridLayoutManager(this,1);grid.setLayoutManager(layout);grid.setItemAnimator(null);
+        adapter=new Rows();grid.setAdapter(adapter);grid.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->{if(r-l!=or-ol)updateColumns();});body.addView(grid,new LinearLayout.LayoutParams(0,-1,1));
 
-        empty = text(this, "Само още миг…", 17, MUTED, false); empty.setGravity(Gravity.CENTER); browser.addView(empty);
-        grid = new RecyclerView(this); grid.setClipToPadding(false); grid.setPadding(d(4), d(4), d(4), d(10));
-        layout = new GridLayoutManager(this, 2); grid.setLayoutManager(layout); grid.setItemAnimator(null);
-        adapter = new Cards(); grid.setAdapter(adapter);
-        grid.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob) -> { if (r-l != or-ol) updateColumns(); });
-        browser.addView(grid, new LinearLayout.LayoutParams(-1, 0, 1));
-        TextView footer = text(this, "Малка крачка. Голямо откритие.  ✦", 12, MUTED, false); footer.setGravity(Gravity.CENTER); browser.addView(footer);
-
-        playerPanel = column(); playerPanel.setBackgroundColor(0xFF101529); playerPanel.setVisibility(View.GONE); root.addView(playerPanel, fill());
-        LinearLayout controls = row(); controls.setPadding(d(12), d(8), d(12), d(8));
-        Button close = button(this, "← Моите уроци", 0xFFEDE7FF, v -> stopPlayback(true));
-        controls.addView(close, new LinearLayout.LayoutParams(d(160), d(48)));
-        playerTitle = text(this, "", 17, Color.WHITE, true); playerTitle.setMaxLines(2); playerTitle.setPadding(d(14), 0, 0, 0);
-        controls.addView(playerTitle, new LinearLayout.LayoutParams(0, -2, 1)); playerPanel.addView(controls);
-        playerArea = new FrameLayout(this); playerPanel.addView(playerArea, new LinearLayout.LayoutParams(-1, 0, 1));
-        playerView = new PlayerView(this); playerView.setControllerAutoShow(true); playerView.setKeepScreenOn(true);
-        playerView.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER); playerArea.addView(playerView, fill());
-        loading = column(); loading.setGravity(Gravity.CENTER); loading.setPadding(d(24), d(20), d(24), d(20));
-        loading.setBackground(round(this, 0xFFF0EBFF, 28, Color.TRANSPARENT));
-        loading.addView(new Owl(this), new LinearLayout.LayoutParams(d(100), d(100)));
-        waiting = text(this, "Подготвяме твоя урок…", 20, INK, true); waiting.setGravity(Gravity.CENTER); loading.addView(waiting);
-        TextView hint = text(this, "Още малко и започваме!", 14, MUTED, false); hint.setGravity(Gravity.CENTER); loading.addView(hint);
-        ProgressBar progress = new ProgressBar(this); LinearLayout.LayoutParams progressLp = new LinearLayout.LayoutParams(d(28),d(28)); progressLp.topMargin=d(16); loading.addView(progress,progressLp);
-        FrameLayout.LayoutParams loadingLp = new FrameLayout.LayoutParams(d(300), -2, Gravity.CENTER); playerArea.addView(loading, loadingLp);
-        render();
+        playerPanel=column();playerPanel.setBackgroundColor(0xFF10172A);playerPanel.setVisibility(View.GONE);root.addView(playerPanel,fill());
+        LinearLayout controls=row();controls.setPadding(d(10),d(8),d(10),d(8));controls.addView(button(this,"← Моите уроци",Color.WHITE,BLUE,v->stopPlayback(true)),new LinearLayout.LayoutParams(d(150),d(46)));
+        playerTitle=text(this,"",19,Color.WHITE,true);playerTitle.setMaxLines(2);playerTitle.setPadding(d(12),0,0,0);controls.addView(playerTitle,new LinearLayout.LayoutParams(0,-2,1));playerPanel.addView(controls);
+        FrameLayout area=new FrameLayout(this);playerPanel.addView(area,new LinearLayout.LayoutParams(-1,0,1));
+        playerView=new PlayerView(this);playerView.setKeepScreenOn(true);playerView.setControllerAutoShow(true);playerView.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER);area.addView(playerView,fill());
+        loading=column();loading.setGravity(Gravity.CENTER);loading.setPadding(d(24),d(20),d(24),d(20));loading.setBackground(round(this,Color.WHITE,16,Color.TRANSPARENT,0));
+        KidStyle.Owl owl=new KidStyle.Owl(this);loading.addView(owl,new LinearLayout.LayoutParams(d(86),d(86)));
+        TextView preparing=text(this,"Подготвяме твоя урок…",23,INK,true);preparing.setGravity(Gravity.CENTER);loading.addView(preparing);
+        TextView hint=text(this,"Още малко и започваме!",16,MUTED,false);loading.addView(hint);
+        ProgressBar progress=new ProgressBar(this);LinearLayout.LayoutParams progressLp=new LinearLayout.LayoutParams(d(28),d(28));progressLp.topMargin=d(14);loading.addView(progress,progressLp);
+        area.addView(loading,new FrameLayout.LayoutParams(d(295),-2,Gravity.CENTER));render();
     }
-
-    private final Runnable filter = this::render;
-    private int heroHeight() { return d(getResources().getConfiguration().screenHeightDp < 500 ? 92 : 122); }
-    private void updateColumns() {
-        if (layout == null) return;
-        int width = getResources().getConfiguration().screenWidthDp;
-        boolean home = pickingGrade || subject == null && search.length() == 0;
-        int columns = home ? width >= 1000 ? 4 : width >= 650 ? 3 : 2 : width >= 1000 ? 3 : width >= 650 ? 2 : 1;
-        layout.setSpanCount(columns);
+    private final Runnable filter=this::render;
+    private void updateColumns(){
+        if(layout==null)return;
+        int width=getResources().getConfiguration().screenWidthDp;
+        layout.setSpanCount(course!=null||search.length()>0?1:subject!=null?(width>=900?3:2):width>=1100?3:width>=700?2:1);
+        sectionRail.setVisibility(course!=null&&search.length()==0&&width>=900&&!chapterPositions.isEmpty()?View.VISIBLE:View.GONE);
+        sectionsButton.setVisibility(course!=null&&search.length()==0&&width<900&&!chapterPositions.isEmpty()?View.VISIBLE:View.GONE);
     }
-    @Override public void onConfigurationChanged(Configuration config) {
-        super.onConfigurationChanged(config); hero.getLayoutParams().height=heroHeight(); hero.requestLayout(); updateColumns();
+    @Override public void onConfigurationChanged(Configuration c){super.onConfigurationChanged(c);updateColumns();}
+    protected Catalog readTorrent(File file)throws IOException{return Catalog.load(file);}
+    protected SchoolCatalog readSchoolCatalog(File file)throws IOException{
+        SchoolCatalog loaded=new SchoolCatalog(readTorrent(file));
+        try(InputStreamReader in=new InputStreamReader(getAssets().open("site-outline.tsv"),StandardCharsets.UTF_8)){loaded.readOutline(in);}
+        return loaded;
     }
-
-    private void loadLibrary() {
-        worker.execute(() -> {
-            try {
-                SafeFiles.deleteTree(new File(getFilesDir(), "active-stream"));
-                File file = new File(getFilesDir(), "lessons.torrent");
-                if (!file.isFile()) try (InputStream in=getAssets().open("lessons.torrent"); FileOutputStream out=new FileOutputStream(file)) {
-                    byte[] bytes=new byte[32768]; int count; while ((count=in.read(bytes))!=-1) out.write(bytes,0,count);
-                }
-                LessonLibrary loaded = new LessonLibrary(Catalog.load(file));
-                main.post(() -> { if (!isDestroyed()) { torrent=file; library=loaded; render(); } });
-            } catch (Exception | LinkageError e) {
-                Log.e("Urokche", "Cannot load bundled lessons",e);
-                main.post(() -> { if (!isFinishing()&&!isDestroyed()) new AlertDialog.Builder(this).setTitle("Още един опит?")
-                        .setMessage("Уроците не успяха да се отворят. Нека опитаме отново.")
-                        .setPositiveButton("Опитай пак",(d,w)->loadLibrary()).setNegativeButton("Назад",(d,w)->finish()).show(); });
+    private void loadLibrary(){
+        worker.execute(()->{try{
+            SafeFiles.deleteTree(new File(getFilesDir(),"active-stream"));File file=new File(getFilesDir(),"lessons.torrent");
+            if(!file.isFile())try(InputStream in=getAssets().open("lessons.torrent");FileOutputStream out=new FileOutputStream(file)){byte[] bytes=new byte[32768];int n;while((n=in.read(bytes))!=-1)out.write(bytes,0,n);}
+            SchoolCatalog loaded=readSchoolCatalog(file);
+            main.post(()->{if(!isDestroyed()){torrent=file;library=loaded;render();}});
+        }catch(Exception|LinkageError e){Log.e("Urokche","Catalog",e);main.post(()->{if(!isFinishing()&&!isDestroyed())new AlertDialog.Builder(this).setTitle("Още един опит?").setMessage("Уроците не успяха да се отворят. Нека опитаме отново.").setPositiveButton("Опитай пак",(d,w)->loadLibrary()).setNegativeButton("Назад",(d,w)->finish()).show();});}});
+    }
+    private void render(){
+        if(adapter==null)return;List<Tile> rows=new ArrayList<>();chapterPositions.clear();
+        if(library==null){empty.setVisibility(View.VISIBLE);tabs.setVisibility(View.GONE);back.setVisibility(View.GONE);sectionsButton.setVisibility(View.GONE);sectionRail.setVisibility(View.GONE);return;}
+        boolean searching=search.length()>0,home=subject==null&&!searching;
+        tabs.setVisibility(home?View.VISIBLE:View.GONE);back.setVisibility(home?View.GONE:View.VISIBLE);resume.setVisibility(View.GONE);
+        classButton.setVisibility(group.equals("school")||subject!=null?View.VISIBLE:View.GONE);classButton.setText(subject!=null?"Друг клас":grade<0?"Моят клас":grade+". клас");
+        for(int i=0;i<tabButtons.size();i++){Button b=tabButtons.get(i);interactive(b,group.equals(GROUPS[i])?BLUE:Color.WHITE,22,BLUE);b.setTextColor(group.equals(GROUPS[i])?Color.WHITE:INK);}
+        hero.setBackgroundColor(course!=null?color(course.subject.name):Color.WHITE);greeting.setTextColor(course!=null?Color.WHITE:INK);description.setTextColor(course!=null?Color.WHITE:MUTED);
+        if(searching){greeting.setText("Намери своя урок");description.setText(course==null?"Търсене в наличните видео уроци":course.subject.name+" · "+course.label);screenTitle.setText("Резултати");for(SchoolCatalog.Lesson l:library.search(search.getText().toString(),course,group.equals("school")?grade:-1))rows.add(Tile.lesson(l));}
+        else if(course!=null){
+            greeting.setText(course.subject.name);description.setText(course.label+" · "+course.lessons.size()+" видео урока");screenTitle.setText("Видео уроци");
+            String previous=null;
+            for(SchoolCatalog.Lesson l:course.lessons){
+                String title=l.sectionTitle.isEmpty()?"Още налични уроци":l.sectionTitle;
+                if(!title.equals(previous)&&!l.sectionTitle.isEmpty()){
+                    if(!chapterPositions.containsKey(title))chapterPositions.put(title,rows.size());
+                    rows.add(Tile.chapter(l.sectionLabel,title));
+                }else if(previous!=null&&!title.equals(previous))rows.add(Tile.chapter("",title));
+                rows.add(Tile.lesson(l));previous=title;
             }
-        });
-    }
-
-    private void render() {
-        if (adapter == null) return;
-        updateColumns();
-        List<Tile> tiles=new ArrayList<>();
-        if (library == null) { empty.setVisibility(View.VISIBLE); search.setVisibility(View.GONE); classButton.setVisibility(View.GONE); back.setVisibility(View.GONE); return; }
-        classButton.setVisibility(pickingGrade ? View.GONE : View.VISIBLE); classButton.setText(LessonLibrary.gradeLabel(grade)+" ▾");
-        search.setVisibility(pickingGrade ? View.GONE : View.VISIBLE);
-        resume.setVisibility(View.GONE);
-        if (pickingGrade) {
-            greeting.setText("Здравей, откривателю!"); encouragement.setText("Избери своя клас. Да учим с усмивка!"); section.setText("В кой клас си?");
-            back.setVisibility(grade==-2 ? View.GONE : View.VISIBLE);
-            for (int g=0;g<=12;g++) tiles.add(new Tile(g)); tiles.add(new Tile(-1));
-        } else if (search.length()>0) {
-            greeting.setText("Да открием твоя урок!"); encouragement.setText("Търсим в "+LessonLibrary.gradeLabel(grade).toLowerCase(java.util.Locale.ROOT));
-            section.setText("Намерени уроци"); back.setVisibility(View.VISIBLE);
-            for (LessonLibrary.Entry entry:library.entries(grade,null,"",search.getText().toString())) tiles.add(new Tile(entry,false));
-        } else if (subject==null) {
-            greeting.setText("Какво ще открием днес?"); encouragement.setText("Избери предмет и намери своя следващ урок."); section.setText("Моите предмети"); back.setVisibility(View.GONE);
-            for (LessonLibrary.Entry entry:library.subjects(grade)) tiles.add(new Tile(entry,true));
-            LessonLibrary.Lesson last=library.find(memory.getInt("last-index",-1));
-            if (last!=null && library.forGrade(grade).contains(last) && memory.getLong("last-position",0)>0) {
-                resume.setText("▶  Продължи урока\n"+last.title); resume.setVisibility(View.VISIBLE);
-            }
-        } else {
-            greeting.setText(subject); encouragement.setText("Един урок. Много нови открития!");
-            section.setText(folder.isEmpty() ? "Избери си урок" : folder.substring(0,folder.length()-1).substring(folder.substring(0,folder.length()-1).lastIndexOf('/')+1));
-            back.setVisibility(View.VISIBLE);
-            for (LessonLibrary.Entry entry:library.entries(grade,subject,folder,"")) tiles.add(new Tile(entry,false));
+            rebuildSidebar();
+        }else if(subject!=null){greeting.setText(subject.name);description.setText("Избери клас или ниво");screenTitle.setText("Класове и нива");for(SchoolCatalog.Course c:subject.courses)rows.add(Tile.course(c));}
+        else{
+            greeting.setText(group.equals("preschool")?"Предучилищна подготовка":group.equals("languages")?"Чужди езици":group.equals("more")?"Още за откриване":"Избери предмет и клас");
+            description.setText("Твоята библиотека с видео уроци");screenTitle.setText(group.equals("school")&&grade>=0?"Предмети за "+grade+". клас":"Всички предмети");
+            for(SchoolCatalog.Subject s:library.subjects(group,grade))rows.add(Tile.subject(s));
+            SchoolCatalog.Lesson last=library.find(memory.getInt("last-index",-1));
+            if(last!=null&&memory.getLong("last-position",0)>0){resume.setText("▶  Продължи урока\n"+last.title);resume.setVisibility(View.VISIBLE);}
         }
-        empty.setText("Няма урок с това име. Опитай с друга дума."); empty.setVisibility(tiles.isEmpty()?View.VISIBLE:View.GONE);
-        adapter.replace(tiles);
+        empty.setText("Няма намерени уроци. Опитай с друга дума.");empty.setVisibility(rows.isEmpty()?View.VISIBLE:View.GONE);
+        adapter.replace(rows);updateColumns();
     }
+    private void rebuildSidebar(){
+        sidebar.removeAllViews();sidebar.addView(text(this,"Раздели",23,MUTED,true));
+        for(String title:chapterPositions.keySet()){
+            Button b=button(this,title,BG,INK,v->jumpToChapter(title));b.setTextSize(16);b.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);b.setMaxLines(4);b.setMinHeight(d(60));
+            LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=d(8);sidebar.addView(b,lp);
+        }
+    }
+    private void jumpToChapter(String title){Integer position=chapterPositions.get(title);if(position==null)return;grid.scrollToPosition(position);main.postDelayed(()->{RecyclerView.ViewHolder h=grid.findViewHolderForAdapterPosition(position+1);if(h!=null)h.itemView.requestFocus();},120);}
+    private void pickChapter(){String[] labels=chapterPositions.keySet().toArray(new String[0]);new AlertDialog.Builder(this).setTitle("Раздели").setItems(labels,(d,w)->jumpToChapter(labels[w])).setNegativeButton("Назад",null).show();}
+    private void pickGrade(){String[] labels=new String[13];labels[0]="Всички класове";for(int i=1;i<=12;i++)labels[i]=i+". клас";new AlertDialog.Builder(this).setTitle("Моят клас").setSingleChoiceItems(labels,grade<0?0:grade,(dialog,which)->{grade=which==0?-1:which;memory.edit().putInt("school-grade",grade).apply();dialog.dismiss();render();grid.scrollToPosition(0);}).setNegativeButton("Назад",null).show();}
+    private void openCourse(SchoolCatalog.Course selected){subject=selected.subject;course=selected;group=subject.group;search.setText("");render();grid.scrollToPosition(0);}
+    private void goHome(){if(engine!=null)stopPlayback(false);subject=null;course=null;search.setText("");browser.setVisibility(View.VISIBLE);playerPanel.setVisibility(View.GONE);render();grid.scrollToPosition(0);}
+    private void goBack(){if(engine!=null){stopPlayback(true);return;}if(search.length()>0)search.setText("");else if(course!=null)course=null;else if(subject!=null)subject=null;else{finish();return;}render();grid.scrollToPosition(0);}
 
-    private void chooseGrade(int selected) {
-        grade=selected; memory.edit().putInt("grade",grade).apply(); pickingGrade=false; subject=null; folder=""; render(); grid.scrollToPosition(0);
-    }
-    private void goBack() {
-        if (engine!=null) { stopPlayback(true); return; }
-        if (search.length()>0) search.setText("");
-        else if (pickingGrade && grade!=-2) pickingGrade=false;
-        else if (!folder.isEmpty()) folder=LessonLibrary.parent(folder.substring(0,folder.length()-1));
-        else if (subject!=null) subject=null;
-        else { finish(); return; }
-        render(); grid.scrollToPosition(0);
-    }
-
-    private void play(LessonLibrary.Lesson lesson) {
-        if (library==null || torrent==null) return;
-        long saved=memory.getInt("last-index",-1)==lesson.video.index ? memory.getLong("last-position",0) : 0;
-        stopPlayback(false);
-        int myGeneration=++generation; current=lesson;
+    private void play(SchoolCatalog.Lesson lesson){
+        if(torrent==null)return;long saved=memory.getInt("last-index",-1)==lesson.video.index?memory.getLong("last-position",0):0;
+        stopPlayback(false);int token=++generation;current=lesson;
         memory.edit().putInt("last-index",lesson.video.index).putLong("last-position",saved).apply();
-        StreamEngine selected=new StreamEngine(new File(getFilesDir(),"active-stream")); engine=selected;
-        browser.setVisibility(View.GONE); playerPanel.setVisibility(View.VISIBLE); loading.setVisibility(View.VISIBLE);
-        waiting.setText("Подготвяме твоя урок…"); playerTitle.setText(lesson.title);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        worker.execute(() -> {
-            try {
-                selected.start(torrent,lesson.video);
-                main.post(() -> {
-                    if (!resumed || generation!=myGeneration || engine!=selected) return;
-                    player=new ExoPlayer.Builder(this).setLoadControl(new DefaultLoadControl.Builder().setBufferDurationsMs(5000,25000,1000,2000).build()).build();
-                    playerView.setPlayer(player);
-                    player.addListener(new Player.Listener() {
-                        @Override public void onPlayerError(PlaybackException error) { if (generation==myGeneration&&engine==selected) lessonError(lesson,error); }
-                        @Override public void onPlaybackStateChanged(int state) {
-                            if (generation!=myGeneration||engine!=selected) return;
-                            loading.setVisibility(state==Player.STATE_BUFFERING ? View.VISIBLE : View.GONE);
-                            if (state==Player.STATE_READY) { playerView.requestFocus(); }
-                            if (state==Player.STATE_ENDED) completed(lesson);
-                        }
-                    });
-                    MediaItem item=MediaItem.fromUri(Uri.parse("torrent://lesson/"+lesson.video.index));
-                    player.setMediaSource(new ProgressiveMediaSource.Factory(() -> new TorrentDataSource(selected,lesson.video))
-                            .setLoadErrorHandlingPolicy(new DefaultLoadErrorHandlingPolicy(0)).createMediaSource(item));
-                    if (saved>0) player.seekTo(saved);
-                    player.prepare(); player.play(); playerView.requestFocus();
-                });
-            } catch (Exception | LinkageError error) { main.post(() -> { if (generation==myGeneration&&!isDestroyed()) lessonError(lesson,error); }); }
-        });
-    }
-
-    private void completed(LessonLibrary.Lesson lesson) {
-        memory.edit().putBoolean("done."+lesson.video.index,true).putInt("last-index",-1).putLong("last-position",0).apply();
-        stopPlayback(true,false);
-        LessonLibrary.Lesson next=library.next(lesson,grade);
-        AlertDialog.Builder dialog=new AlertDialog.Builder(this).setTitle("Браво, откривателю!  ★")
-                .setMessage("Още един научен урок. Чудесна работа!")
-                .setNegativeButton("Моите уроци",null);
-        if (next!=null) dialog.setPositiveButton("Следващ урок",(d,w)->play(next));
-        else dialog.setPositiveButton("Супер!",null);
-        dialog.show();
-    }
-    private void lessonError(LessonLibrary.Lesson lesson,Throwable error) {
-        Log.e("Urokche","Lesson playback failed",error); stopPlayback(true);
-        if (isFinishing()||isDestroyed()) return;
-        String message="Урокът не успя да се зареди. Можеш да опиташ пак или да избереш друг.";
-        if (error.getMessage()!=null&&error.getMessage().contains("място")) message="Паметта на устройството е почти пълна. Помоли възрастен за помощ.";
-        new AlertDialog.Builder(this).setTitle("Още един опит?").setMessage(message)
-                .setPositiveButton("Опитай пак",(d,w)->play(lesson)).setNegativeButton("Друг урок",null).show();
-    }
-
-    private void stopPlayback(boolean show) { stopPlayback(show,true); }
-    private void stopPlayback(boolean show,boolean save) {
-        generation++;
-        StreamEngine old=engine; engine=null; if (old!=null) old.cancel();
-        if (player!=null) {
-            if (save&&current!=null&&player.getCurrentPosition()>0) memory.edit().putInt("last-index",current.video.index).putLong("last-position",player.getCurrentPosition()).apply();
-            playerView.setPlayer(null); player.release(); player=null;
-        }
-        if (old!=null) worker.execute(() -> { try { old.close(); } catch (IOException e) { Log.e("Urokche","Cache cleanup",e); } });
-        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        if (show) { playerPanel.setVisibility(View.GONE); browser.setVisibility(View.VISIBLE); render(); grid.requestFocus(); }
-    }
-    @Override protected void onStart() { super.onStart(); resumed=true; }
-    @Override protected void onStop() { resumed=false; stopPlayback(true); super.onStop(); }
-    @Override protected void onDestroy() { main.removeCallbacksAndMessages(null); worker.shutdown(); super.onDestroy(); }
-    @Override public void onBackPressed() { goBack(); }
-    @Override public boolean dispatchKeyEvent(KeyEvent event) { return player!=null&&playerView.dispatchMediaKeyEvent(event)||super.dispatchKeyEvent(event); }
-    private int d(int value) { return dp(this,value); }
-    private LinearLayout column() { LinearLayout v=new LinearLayout(this); v.setOrientation(LinearLayout.VERTICAL); return v; }
-    private LinearLayout row() { LinearLayout v=new LinearLayout(this); v.setGravity(Gravity.CENTER_VERTICAL); return v; }
-    private FrameLayout.LayoutParams fill() { return new FrameLayout.LayoutParams(-1,-1); }
-
-    private static final class Tile {
-        final LessonLibrary.Entry entry; final int grade; final boolean subject;
-        Tile(int grade) { this.grade=grade; this.entry=null; this.subject=false; }
-        Tile(LessonLibrary.Entry entry,boolean subject) { this.entry=entry; this.subject=subject; this.grade=-2; }
-    }
-    private final class Cards extends RecyclerView.Adapter<Holder> {
-        private List<Tile> tiles=new ArrayList<>();
-        void replace(List<Tile> value) { tiles=value; notifyDataSetChanged(); }
-        @Override public Holder onCreateViewHolder(ViewGroup parent,int type) {
-            LinearLayout card=column(); card.setPadding(d(17),d(14),d(17),d(14)); card.setGravity(Gravity.CENTER_VERTICAL);
-            card.setElevation(d(1));
-            RecyclerView.LayoutParams lp=new RecyclerView.LayoutParams(-1,-2); lp.setMargins(d(5),d(5),d(5),d(7)); card.setLayoutParams(lp);
-            TextView symbol=text(MainActivity.this,"",30,PURPLE,true); symbol.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO); card.addView(symbol);
-            TextView title=text(MainActivity.this,"",18,INK,true); title.setMaxLines(3); card.addView(title);
-            TextView detail=text(MainActivity.this,"",13,MUTED,false); detail.setPadding(0,d(6),0,0); detail.setMaxLines(2); card.addView(detail);
-            return new Holder(card,symbol,title,detail);
-        }
-        @Override public void onBindViewHolder(Holder h,int position) {
-            Tile tile=tiles.get(position); LessonLibrary.Entry e=tile.entry;
-            boolean completed=e!=null&&e.lesson!=null&&memory.getBoolean("done."+e.lesson.video.index,false);
-            int background=e==null ? COLORS[Math.floorMod(tile.grade,COLORS.length)] : tile.subject ? color(e.title) : e.lesson==null ? 0xFFF0EBFF : completed ? 0xFFEAF8F1 : Color.WHITE;
-            interactive(h.itemView,background,22);
-            h.symbol.setTextSize(e==null||tile.subject?30:23);
-            h.itemView.setMinimumHeight(d(e==null||tile.subject?148:126));
-            if (e==null) {
-                h.symbol.setText(tile.grade<0?"✦":tile.grade==0?"🌻":String.valueOf(tile.grade));
-                h.title.setText(LessonLibrary.gradeLabel(tile.grade)); h.detail.setText(tile.grade<0?"Цялата библиотека  →":"Моето приключение  →");
-            } else if (tile.subject) {
-                h.symbol.setText(icon(e.title)); h.title.setText(e.title); h.detail.setText(e.count+" урока за откриване  →");
-            } else if (e.lesson==null) {
-                h.symbol.setText("📚"); h.title.setText(e.title); h.detail.setText(e.count+" урока  →");
-            } else {
-                h.symbol.setText(completed?"★":"▶"); h.symbol.setTextSize(23);
-                h.title.setText(e.lesson.title);
-                h.detail.setText(completed?"Научено! Браво на теб.":search.length()>0?e.lesson.subject+" · "+LessonLibrary.gradeLabel(e.lesson.grade):"Гледай урока");
-            }
-            h.itemView.setContentDescription(h.title.getText()+". "+h.detail.getText());
-            h.itemView.setOnClickListener(v -> {
-                if (e==null) chooseGrade(tile.grade);
-                else if (tile.subject) { subject=e.title; folder=""; render(); grid.scrollToPosition(0); }
-                else if (e.lesson==null) { folder=e.folder; render(); grid.scrollToPosition(0); }
-                else play(e.lesson);
+        StreamEngine selected=new StreamEngine(new File(getFilesDir(),"active-stream"));engine=selected;
+        browser.setVisibility(View.GONE);playerPanel.setVisibility(View.VISIBLE);loading.setVisibility(View.VISIBLE);playerTitle.setText(lesson.title);getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        worker.execute(()->{try{selected.start(torrent,lesson.video);main.post(()->{
+            if(!resumed||generation!=token||engine!=selected)return;
+            player=new ExoPlayer.Builder(this).setLoadControl(new DefaultLoadControl.Builder().setBufferDurationsMs(5000,25000,1000,2000).build()).build();playerView.setPlayer(player);
+            player.addListener(new Player.Listener(){
+                @Override public void onPlayerError(PlaybackException e){if(generation==token&&engine==selected)lessonError(lesson,e);}
+                @Override public void onPlaybackStateChanged(int state){if(generation!=token||engine!=selected)return;loading.setVisibility(state==Player.STATE_BUFFERING?View.VISIBLE:View.GONE);if(state==Player.STATE_READY)playerView.requestFocus();if(state==Player.STATE_ENDED)completed(lesson);}
             });
-        }
-        @Override public int getItemCount() { return tiles.size(); }
+            MediaItem item=MediaItem.fromUri(Uri.parse("torrent://lesson/"+lesson.video.index));
+            player.setMediaSource(new ProgressiveMediaSource.Factory(()->new TorrentDataSource(selected,lesson.video)).setLoadErrorHandlingPolicy(new DefaultLoadErrorHandlingPolicy(0)).createMediaSource(item));
+            if(saved>0)player.seekTo(saved);player.prepare();player.play();playerView.requestFocus();
+        });}catch(Exception|LinkageError e){main.post(()->{if(generation==token&&!isDestroyed())lessonError(lesson,e);});}});
     }
-    private static final class Holder extends RecyclerView.ViewHolder {
-        final TextView symbol,title,detail;
-        Holder(View view,TextView symbol,TextView title,TextView detail) { super(view); this.symbol=symbol; this.title=title; this.detail=detail; }
+    private void completed(SchoolCatalog.Lesson lesson){
+        memory.edit().putBoolean("done."+lesson.video.index,true).putInt("last-index",-1).putLong("last-position",0).apply();stopPlayback(true,false);
+        SchoolCatalog.Lesson next=library.next(lesson);AlertDialog.Builder d=new AlertDialog.Builder(this).setTitle("Браво!  ★").setMessage("Още един изгледан урок. Чудесна работа!").setNegativeButton("Моите уроци",null);
+        if(next!=null)d.setPositiveButton("Следващ урок",(x,w)->play(next));else d.setPositiveButton("Супер!",null);d.show();
+    }
+    private void lessonError(SchoolCatalog.Lesson lesson,Throwable error){
+        Log.e("Urokche","Playback",error);stopPlayback(true);if(isFinishing()||isDestroyed())return;
+        String message=error.getMessage()!=null&&error.getMessage().contains("място")?"Паметта на устройството е почти пълна. Помоли възрастен за помощ.":"Урокът не успя да се зареди. Можеш да опиташ пак или да избереш друг.";
+        new AlertDialog.Builder(this).setTitle("Още един опит?").setMessage(message).setPositiveButton("Опитай пак",(d,w)->play(lesson)).setNegativeButton("Друг урок",null).show();
+    }
+    private void stopPlayback(boolean show){stopPlayback(show,true);}
+    private void stopPlayback(boolean show,boolean save){
+        generation++;StreamEngine old=engine;engine=null;if(old!=null)old.cancel();
+        if(player!=null){if(save&&current!=null&&player.getCurrentPosition()>0)memory.edit().putInt("last-index",current.video.index).putLong("last-position",player.getCurrentPosition()).apply();playerView.setPlayer(null);player.release();player=null;}
+        if(old!=null)worker.execute(()->{try{old.close();}catch(IOException e){Log.e("Urokche","Cleanup",e);}});
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);if(show){playerPanel.setVisibility(View.GONE);browser.setVisibility(View.VISIBLE);render();grid.requestFocus();}
+    }
+    @Override protected void onStart(){super.onStart();resumed=true;}
+    @Override protected void onStop(){resumed=false;stopPlayback(true);super.onStop();}
+    @Override protected void onDestroy(){main.removeCallbacksAndMessages(null);worker.shutdown();super.onDestroy();}
+    @Override public void onBackPressed(){goBack();}
+    @Override public boolean dispatchKeyEvent(KeyEvent event){return player!=null&&playerView.dispatchMediaKeyEvent(event)||super.dispatchKeyEvent(event);}
+    private int d(int value){return dp(this,value);}
+    private LinearLayout column(){LinearLayout v=new LinearLayout(this);v.setOrientation(LinearLayout.VERTICAL);return v;}
+    private LinearLayout row(){LinearLayout v=new LinearLayout(this);v.setGravity(Gravity.CENTER_VERTICAL);return v;}
+    private FrameLayout.LayoutParams fill(){return new FrameLayout.LayoutParams(-1,-1);}
+
+    private static final class Tile{
+        final int type;SchoolCatalog.Subject subject;SchoolCatalog.Course course;SchoolCatalog.Lesson lesson;String label,title;
+        Tile(int type){this.type=type;}static Tile subject(SchoolCatalog.Subject s){Tile t=new Tile(0);t.subject=s;return t;}static Tile course(SchoolCatalog.Course c){Tile t=new Tile(1);t.course=c;return t;}
+        static Tile chapter(String l,String n){Tile t=new Tile(2);t.label=l;t.title=n;return t;}static Tile lesson(SchoolCatalog.Lesson l){Tile t=new Tile(3);t.lesson=l;return t;}
+    }
+    private final class Rows extends RecyclerView.Adapter<Holder>{
+        private List<Tile> rows=new ArrayList<>();void replace(List<Tile> value){rows=value;notifyDataSetChanged();}
+        @Override public int getItemViewType(int p){return rows.get(p).type;}
+        @Override public Holder onCreateViewHolder(ViewGroup parent,int type){
+            LinearLayout card=column();RecyclerView.LayoutParams lp=new RecyclerView.LayoutParams(-1,-2);lp.setMargins(d(6),d(5),d(6),d(type==0?16:5));card.setLayoutParams(lp);
+            Holder h=new Holder(card);
+            if(type==0){card.setPadding(d(14),d(12),d(14),d(14));LinearLayout heading=row();h.icon=new SubjectIcon(MainActivity.this);heading.addView(h.icon,new LinearLayout.LayoutParams(d(38),d(42)));h.title=text(MainActivity.this,"",23,INK,true);h.title.setPadding(d(10),0,0,0);heading.addView(h.title,new LinearLayout.LayoutParams(0,-2,1));card.addView(heading);h.flow=new Flow(MainActivity.this);LinearLayout.LayoutParams f=new LinearLayout.LayoutParams(-1,-2);f.topMargin=d(10);card.addView(h.flow,f);}
+            else if(type==1){card.setPadding(d(18),d(18),d(18),d(18));card.setMinimumHeight(d(105));h.title=text(MainActivity.this,"",25,INK,true);h.detail=text(MainActivity.this,"",16,MUTED,false);card.addView(h.title);card.addView(h.detail);}
+            else if(type==2){card.setPadding(d(52),d(16),0,d(4));h.detail=text(MainActivity.this,"",15,MUTED,true);h.title=text(MainActivity.this,"",23,INK,true);card.addView(h.detail);card.addView(h.title);}
+            else{card.setOrientation(LinearLayout.HORIZONTAL);card.setGravity(Gravity.CENTER_VERTICAL);card.setPadding(d(3),d(3),d(3),d(3));h.number=text(MainActivity.this,"",17,INK,true);h.number.setGravity(Gravity.CENTER);h.number.setBackground(round(MainActivity.this,Color.WHITE,24,BORDER,1));LinearLayout.LayoutParams n=new LinearLayout.LayoutParams(d(38),d(38));n.rightMargin=d(12);card.addView(h.number,n);LinearLayout box=row();box.setPadding(d(15),d(14),d(12),d(14));box.setMinimumHeight(d(72));LinearLayout titles=column();h.title=text(MainActivity.this,"",20,INK,false);h.title.setMaxLines(4);titles.addView(h.title);h.detail=text(MainActivity.this,"",14,MUTED,false);titles.addView(h.detail);box.addView(titles,new LinearLayout.LayoutParams(0,-2,1));h.play=text(MainActivity.this,"▷",28,BLUE,true);h.play.setGravity(Gravity.CENTER);box.addView(h.play,new LinearLayout.LayoutParams(d(40),d(40)));box.setBackground(round(MainActivity.this,Color.WHITE,5,BORDER,1));card.addView(box,new LinearLayout.LayoutParams(0,-2,1));}
+            return h;
+        }
+        @Override public void onBindViewHolder(Holder h,int position){
+            Tile tile=rows.get(position);
+            if(tile.type==0){
+                SchoolCatalog.Subject s=tile.subject;h.title.setText(s.name);h.icon.subject(s.name);h.flow.removeAllViews();interactive(h.itemView,Color.WHITE,8,color(s.name));
+                List<SchoolCatalog.Course> available=library.courses(s,grade);
+                boolean compact=getResources().getConfiguration().screenWidthDp<700&&s.group.equals("school")&&available.stream().anyMatch(c->c.label.matches("\\d+\\. клас"));
+                boolean more=false;
+                for(SchoolCatalog.Course c:available){
+                    if(compact&&!c.label.matches("\\d+\\. клас")){more=true;continue;}
+                    Button b=button(MainActivity.this,c.shortLabel(),Color.WHITE,INK,v->openCourse(c));b.setTextSize(16);b.setContentDescription(s.name+", "+c.label);h.flow.addView(b,new ViewGroup.LayoutParams(c.shortLabel().matches("\\d+")?d(46):-2,d(44)));
+                }
+                if(more)h.flow.addView(button(MainActivity.this,"Още ▾",Color.WHITE,INK,v->{subject=s;course=null;render();grid.scrollToPosition(0);}),new ViewGroup.LayoutParams(-2,d(44)));
+                h.itemView.setOnClickListener(v->{subject=s;course=null;render();grid.scrollToPosition(0);});
+            }else if(tile.type==1){SchoolCatalog.Course c=tile.course;h.title.setText(c.label);h.detail.setText(c.lessons.size()+" видео урока");interactive(h.itemView,Color.WHITE,8,color(c.subject.name));h.itemView.setOnClickListener(v->openCourse(c));}
+            else if(tile.type==2){h.title.setText(tile.title);h.detail.setText(tile.label);h.detail.setVisibility(tile.label.isEmpty()?View.GONE:View.VISIBLE);h.itemView.setFocusable(false);h.itemView.setClickable(false);}
+            else{SchoolCatalog.Lesson l=tile.lesson;boolean done=memory.getBoolean("done."+l.video.index,false);h.title.setText(l.title);h.number.setText(l.number>0?String.valueOf(l.number):"•");h.play.setText(done?"✓":"▷");h.play.setTextColor(done?0xFF0BAA70:color(l.course.subject.name));h.detail.setVisibility(search.length()>0?View.VISIBLE:View.GONE);h.detail.setText(l.course.subject.name+" · "+l.course.label);interactive(h.itemView,Color.TRANSPARENT,6,color(l.course.subject.name));h.itemView.setContentDescription("Урок "+l.number+". "+l.title+(done?". Изгледан":""));h.itemView.setOnClickListener(v->play(l));}
+        }
+        @Override public int getItemCount(){return rows.size();}
+    }
+    private static final class Holder extends RecyclerView.ViewHolder{
+        TextView title,detail,number,play;SubjectIcon icon;Flow flow;Holder(View view){super(view);}
     }
 }

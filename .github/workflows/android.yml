@@ -30,6 +30,10 @@ jobs:
           packages: 'platform-tools platforms;android-35 build-tools;34.0.0'
           log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/cache@v4
+        with:
+          path: build/robolectric-cache
+          key: robolectric-${{ runner.os }}-4.14.1-sdk28-35
       - name: Test, lint and build installable APK
         run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug -PbuildNumber=${{ github.run_number }}
       - name: Name APK
@@ -44,17 +48,18 @@ jobs:
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.2.${{ github.run_number }}
+          tag_name: v0.3.${{ github.run_number }}
           target_commitish: ${{ github.sha }}
-          name: УчаСе · Урокче 0.2.${{ github.run_number }} (тестова версия)
+          name: УчаСе · Урокче 0.3.${{ github.run_number }} (тестова версия)
           prerelease: true
           files: Urokche.apk
           fail_on_unmatched_files: true
           body: |
             Детска библиотека специално за предоставения торент УчаСе. Android 7.0+, телефон, таблет и Android TV.
 
-            Изтегли Urokche.apk от Assets. Избери своя клас, предмет и урок.
-            Цветни карти, весела совичка, продължаване на урока и звездички за изгледаните уроци.
+            Изтегли Urokche.apk от Assets. Подредба по образец на сайта: предмет → клас/ниво → раздел → номериран урок.
+            Показват се единствено файловете от приложения торент. Липсващите уроци, класове и предмети не се добавят.
+            Разделите са съпоставени с публичните заглавия на сайта. Каталогът работи без връзка със сайта.
             Изтегля се избраното видео и нужните гранични части. Кешът се изчиства след затваряне.
             Нужни са достъпни сийдъри. Поддържаните кодеци зависят от устройството.
 
@@ -67,3 +72,4 @@ jobs:
           path: |
             app/build/reports/tests/
             app/build/reports/lint-results-debug.html
+            app/build/reports/ui/
